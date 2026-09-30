@@ -13,80 +13,147 @@ import time
 import socket
 import argparse
 from typing import Optional, Tuple
-from network_utils import send_packet, recv_packet, discover_masters, DEFAULT_MASTER_PORT
+from network_utils import send_packet, recv_packet, discover_masters, WorkerScanner, DEFAULT_MASTER_PORT, get_local_ip
 from cli_ui import (
-    Colors, banner, print_header, print_success, print_info, 
+    Colors, banner, clear_screen, print_header, print_success, print_info, 
     print_warning, print_error, print_task, print_progress_bar
 )
 
 
 def select_or_discover_master() -> Optional[Tuple[str, int]]:
     """
-    Mendeteksi Master Server secara otomatis di jaringan Wi-Fi/LAN via UDP broadcast.
-    Worker tinggal memilih dari daftar Master yang terdeteksi tanpa input manual IP.
+    Infinity Scan: Memindai Master Server secara terus-menerus di jaringan Wi-Fi/LAN.
+    Daftar Master diperbarui secara real-time di layar.
+    Pengguna cukup menekan [Enter] untuk langsung menghubungkan ke Master yang terdeteksi.
     """
-    while True:
-        print_header("PENCARIAN MASTER SERVER OTOMATIS", "Memindai Master di jaringan Wi-Fi/LAN...")
-        print_progress_bar(1, 2, prefix="Memindai Jaringan LAN", suffix="Mengirim UDP Probe...")
-        masters = discover_masters(timeout=1.5)
-        print_progress_bar(2, 2, prefix="Memindai Jaringan LAN", suffix="Selesai (100%)")
+    scanner = WorkerScanner()
+    scanner.start()
 
-        if masters:
-            print_success(f"Ditemukan {len(masters)} Master Server aktif di jaringan:\n")
-            for idx, m in enumerate(masters, 1):
-                print(f"  {Colors.BRIGHT_CYAN}[{idx}]{Colors.RESET} {Colors.BOLD}{m['name']}{Colors.RESET} ({Colors.BRIGHT_GREEN}{m['ip']}:{m['port']}{Colors.RESET})")
-            print(f"  {Colors.BRIGHT_YELLOW}[M]{Colors.RESET} Masukkan IP Master secara manual\n")
+    has_msvcrt = False
+    try:
+        import msvcrt
+        has_msvcrt = True
+    except ImportError:
+        has_msvcrt = False
 
-            default_choice = "1"
-            prompt = f"{Colors.BRIGHT_YELLOW}Pilih Master untuk dihubungkan [1-{len(masters)}, default: {default_choice}]: {Colors.RESET}"
-            try:
-                choice = input(prompt).strip()
-            except (KeyboardInterrupt, EOFError):
-                return None
+    spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    spinner_idx = 0
+    buffer = ""
+    last_rendered_keys = None
+    start_time = time.time()
+    local_worker_ip = get_local_ip()
 
-            if not choice:
-                choice = default_choice
+    clear_screen()
+    banner()
 
-            if choice.upper() == "M":
-                try:
-                    manual_ip = input(f"{Colors.BRIGHT_YELLOW}Masukkan IP Master: {Colors.RESET}").strip()
-                    manual_port_str = input(f"{Colors.BRIGHT_YELLOW}Masukkan Port [{DEFAULT_MASTER_PORT}]: {Colors.RESET}").strip()
-                    manual_port = int(manual_port_str) if manual_port_str else DEFAULT_MASTER_PORT
-                    return manual_ip, manual_port
-                except Exception:
-                    return None
+    try:
+        while True:
+            masters = scanner.get_masters()
+            current_keys = [f"{m['ip']}:{m['port']}" for m in masters]
 
-            try:
-                sel_idx = int(choice) - 1
-                if 0 <= sel_idx < len(masters):
-                    chosen = masters[sel_idx]
-                    return chosen["ip"], chosen["port"]
+            # Redraw layar jika ada master baru yang terdeteksi atau berubah status
+            if current_keys != last_rendered_keys:
+                last_rendered_keys = current_keys
+                clear_screen()
+                banner()
+                print_header("INFINITY AUTO-SCAN MASTER SERVER", "Pencarian Master di Jaringan Wi-Fi/LAN Secara Real-Time")
+                print(f" {Colors.CYAN}•{Colors.RESET} Status Pemindai : {Colors.BRIGHT_GREEN}AKTIF (Continuous Infinity Scan){Colors.RESET}")
+                print(f" {Colors.CYAN}•{Colors.RESET} IP Worker Lokal : {Colors.BOLD}{local_worker_ip}{Colors.RESET}")
+                print(f" {Colors.CYAN}•{Colors.RESET} Port Discovery  : {Colors.DIM}UDP 5002{Colors.RESET}")
+
+                if masters:
+                    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Daftar Master Aktif Terdeteksi ({len(masters)} server ditemukan):{Colors.RESET}")
+                    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+                    for idx, m in enumerate(masters, 1):
+                        name_str = m.get("name", "Master-Node")
+                        ip_port_str = f"{m['ip']}:{m['port']}"
+                        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[{idx}]{Colors.RESET} {Colors.BOLD}{name_str:<18}{Colors.RESET} {Colors.BRIGHT_GREEN}{ip_port_str:<21}{Colors.RESET} {Colors.BRIGHT_GREEN}[ONLINE]{Colors.RESET}   {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+                    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+                    print(f"  {Colors.BRIGHT_YELLOW}[M]{Colors.RESET} Masukkan IP Master secara manual")
+                    print(f"  {Colors.BRIGHT_RED}[0]{Colors.RESET} Batal / Kembali ke Menu Utama")
+                    print(f"\n{Colors.DIM}-------------------------------------------------------------------{Colors.RESET}")
+                    print(f"{Colors.BRIGHT_GREEN}>>> Tekan [Enter] langsung untuk menghubungkan ke Master [1] <<<{Colors.RESET}")
+                    if len(masters) > 1:
+                        print(f"{Colors.DIM}-> Atau ketik nomor [1-{len(masters)}] lalu tekan [Enter]{Colors.RESET}")
+                    print()
                 else:
-                    print_warning("Nomor pilihan tidak valid.")
-            except ValueError:
-                print_warning("Pilihan tidak valid.")
-        else:
-            print_warning("Tidak ada Master yang terdeteksi secara otomatis.")
-            print(f"  {Colors.CYAN}[R]{Colors.RESET} Pindai Ulang (Scan Again)")
-            print(f"  {Colors.CYAN}[M]{Colors.RESET} Masukkan IP Manual")
-            print(f"  {Colors.RED}[0]{Colors.RESET} Batal / Kembali\n")
-            try:
-                fallback_choice = input(f"{Colors.BRIGHT_YELLOW}Pilih opsi [R/M/0, default: R]: {Colors.RESET}").strip().upper()
-            except (KeyboardInterrupt, EOFError):
-                return None
+                    print(f"\n{Colors.BRIGHT_YELLOW}[*] Sedang memindai jaringan... Menunggu Master Server aktif.{Colors.RESET}")
+                    print(f"    {Colors.DIM}Pastikan opsi [1] Master Node sudah dijalankan di komputer Master.{Colors.RESET}")
+                    print(f"\n    {Colors.BRIGHT_YELLOW}[M]{Colors.RESET} Masukkan IP Manual  |  {Colors.BRIGHT_RED}[0]{Colors.RESET} Batal / Kembali ke Menu\n")
 
-            if not fallback_choice or fallback_choice == "R":
-                continue
-            elif fallback_choice == "M":
-                try:
-                    manual_ip = input(f"{Colors.BRIGHT_YELLOW}Masukkan IP Master: {Colors.RESET}").strip()
-                    manual_port_str = input(f"{Colors.BRIGHT_YELLOW}Masukkan Port [{DEFAULT_MASTER_PORT}]: {Colors.RESET}").strip()
-                    manual_port = int(manual_port_str) if manual_port_str else DEFAULT_MASTER_PORT
-                    return manual_ip, manual_port
-                except Exception:
-                    return None
+            # Indikator spinner dan status pencarian live
+            spinner = spinner_chars[spinner_idx % len(spinner_chars)]
+            spinner_idx += 1
+            elapsed = int(time.time() - start_time)
+
+            if not masters:
+                sys.stdout.write(f"\r  {Colors.BRIGHT_CYAN}{spinner}{Colors.RESET} {Colors.DIM}Memindai LAN/Wi-Fi ({elapsed}s)... {Colors.RESET}{Colors.BRIGHT_YELLOW}{buffer}{Colors.RESET}   ")
+                sys.stdout.flush()
             else:
-                return None
+                prompt_label = f"Pilih Master [default: 1]: {buffer}"
+                sys.stdout.write(f"\r  {Colors.BRIGHT_YELLOW}{prompt_label}{Colors.RESET}   ")
+                sys.stdout.flush()
+
+            # Non-blocking input polling
+            if has_msvcrt:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    # Tombol Enter ditekan
+                    if ch in (b"\r", b"\n"):
+                        sys.stdout.write("\n")
+                        choice = buffer.strip()
+                        if not choice:
+                            choice = "1" if masters else ""
+
+                        if choice == "0":
+                            scanner.stop()
+                            return None
+                        elif choice.upper() == "M":
+                            scanner.stop()
+                            try:
+                                manual_ip = input(f"\n{Colors.BRIGHT_YELLOW}Masukkan IP Master: {Colors.RESET}").strip()
+                                manual_port_str = input(f"{Colors.BRIGHT_YELLOW}Masukkan Port [{DEFAULT_MASTER_PORT}]: {Colors.RESET}").strip()
+                                manual_port = int(manual_port_str) if manual_port_str else DEFAULT_MASTER_PORT
+                                return manual_ip, manual_port
+                            except Exception:
+                                return None
+                        else:
+                            try:
+                                sel_idx = int(choice) - 1
+                                if 0 <= sel_idx < len(masters):
+                                    chosen = masters[sel_idx]
+                                    scanner.stop()
+                                    return chosen["ip"], chosen["port"]
+                                else:
+                                    buffer = ""
+                            except ValueError:
+                                buffer = ""
+                    # Backspace ditekan
+                    elif ch in (b"\x08", b"\x7f"):
+                        if buffer:
+                            buffer = buffer[:-1]
+                            sys.stdout.write("\r" + " " * 70 + "\r")
+                    # Ctrl+C ditekan
+                    elif ch == b"\x03":
+                        scanner.stop()
+                        return None
+                    else:
+                        try:
+                            char_str = ch.decode("utf-8")
+                            if char_str.isprintable():
+                                buffer += char_str
+                        except Exception:
+                            pass
+                time.sleep(0.08)
+            else:
+                time.sleep(0.3)
+
+    except KeyboardInterrupt:
+        scanner.stop()
+        return None
+    finally:
+        scanner.stop()
+
 
 
 def run_worker(host: str, port: int, worker_name: Optional[str] = None):
@@ -189,11 +256,17 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
 def run_worker_cli():
     """CLI interaktif untuk Worker: auto-discovery Master tanpa ketik IP manual."""
-    target = select_or_discover_master()
-    if not target:
-        return
-    host, port = target
-    run_worker(host=host, port=port)
+    while True:
+        target = select_or_discover_master()
+        if not target:
+            break
+        host, port = target
+        run_worker(host=host, port=port)
+        print(f"\n{Colors.DIM}Kembali ke mode auto-scan dalam 2 detik (Ctrl+C untuk keluar)...{Colors.RESET}")
+        try:
+            time.sleep(2)
+        except KeyboardInterrupt:
+            break
 
 
 if __name__ == "__main__":

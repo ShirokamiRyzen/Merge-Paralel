@@ -62,24 +62,31 @@ Merge-Paralel/
    python main.py
    ```
 2. Pilih opsi **`[2] WORKER NODE`**.
-3. Worker akan otomatis memindai jaringan dan menampilkan Master yang terdeteksi:
+3. Worker akan otomatis menjalankan **Continuous Infinity Scan** di jaringan dan menampilkan daftar Master secara *real-time*:
    ```text
-   +---------------------------------------------------------------+
-   |               PENCARIAN MASTER SERVER OTOMATIS                |
-   |           Memindai Master di jaringan Wi-Fi/LAN...            |
-   +---------------------------------------------------------------+
-     Memindai Jaringan LAN    [##############################] 100.0% Selesai (100%)
+   +-------------------------------------------------------------------+
+   |                 INFINITY AUTO-SCAN MASTER SERVER                  |
+   |      Pencarian Master di Jaringan Wi-Fi/LAN Secara Real-Time      |
+   +-------------------------------------------------------------------+
+    • Status Pemindai : AKTIF (Continuous Infinity Scan)
+    • IP Worker Lokal : 192.168.1.15
+    • Port Discovery  : UDP 5002
 
-   [OK] Ditemukan 1 Master Server aktif di jaringan:
-
-     [1] DESKTOP-L5EMIAD (192.168.1.4:5000)
+   Daftar Master Aktif Terdeteksi (1 server ditemukan):
+    +-------------------------------------------------------------------+
+    |  [1] LAPTOP-MASTER       192.168.1.4:5000      [ONLINE]           |
+    +-------------------------------------------------------------------+
      [M] Masukkan IP Master secara manual
+     [0] Batal / Kembali ke Menu Utama
 
-   Pilih Master untuk dihubungkan [1, default: 1]: 
+   -------------------------------------------------------------------
+   >>> Tekan [Enter] langsung untuk menghubungkan ke Master [1] <<<
+
+     Pilih Master [default: 1]: 
    ```
 4. Tekan **`[Enter]`** (atau ketik `1`).
-5. Worker langsung terhubung ke Master **tanpa mengetik alamat IP secara manual**!
-6. Di layar Laptop 1 (Master), worker akan terdeteksi otomatis dan jumlah worker aktif langsung bertambah.
+5. Worker langsung terhubung ke Master **tanpa perlu mengetik alamat IP secara manual**!
+6. Di layar Laptop 1 (Master), worker akan terdeteksi seketika dengan notifikasi real-time hijau cerah.
 
 ---
 

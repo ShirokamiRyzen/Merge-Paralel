@@ -10,23 +10,11 @@ Pilih apakah komputer ini akan bertindak sebagai:
 import sys
 import socket
 from cli_ui import Colors, banner, clear_screen, print_header, print_info, print_warning
+from network_utils import get_local_ip, DEFAULT_MASTER_PORT
 import master
 import worker
 
-DEFAULT_PORT = 5000
-
-
-def get_local_ip() -> str:
-    """Mendeteksi IP LAN lokal perangkat saat ini."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
+DEFAULT_PORT = DEFAULT_MASTER_PORT
 
 
 def main():
@@ -40,7 +28,7 @@ def main():
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}                     {Colors.BOLD}{Colors.BRIGHT_WHITE}PILIH PERAN KOMPUTER INI{Colors.RESET}                      {Colors.BRIGHT_BLUE}|{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}MASTER NODE (Server){Colors.RESET} - Bangkitkan Data, Koordinasi & Sorting {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Hubungkan ke Master & Urutkan Data   {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Infinity Scan Master & Urutkan Data  {Colors.BRIGHT_BLUE}|{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar Program                                                {Colors.BRIGHT_BLUE}|{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}\n")
 

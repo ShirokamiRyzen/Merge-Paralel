@@ -179,6 +179,12 @@ class MasterServer:
 
                 with self.workers_lock:
                     self.workers.append(worker_info)
+                    active_count = len(self.workers)
+
+                # Notifikasi real-time di console Master saat worker terdeteksi & terhubung
+                sys.stdout.write(f"\r\n{Colors.BRIGHT_GREEN}[✓] WORKER BARU TERDETEKSI & TERHUBUNG: {worker_name} ({client_addr[0]}:{client_addr[1]}) [Total: {active_count} Worker Online]{Colors.RESET}\n")
+                sys.stdout.write(f"{Colors.BRIGHT_YELLOW}Pilih menu [1-3, 0]: {Colors.RESET}")
+                sys.stdout.flush()
 
                 worker_counter += 1
             except Exception:
@@ -470,9 +476,16 @@ def run_master_cli(port: int = DEFAULT_PORT):
 
         print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}                    {Colors.BOLD}{Colors.BRIGHT_WHITE}PANEL KONTROL MASTER (SERVER){Colors.RESET}                    {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+        worker_text = f"{len(workers)} node"
+        if workers:
+            w_names = ", ".join(w.get("name", "Worker") for w in workers[:2])
+            if len(workers) > 2:
+                w_names += f" +{len(workers)-2}"
+            worker_text += f" ({w_names})"
+
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Alamat IP Master  : {Colors.BOLD}{Colors.BRIGHT_GREEN}{server.local_ip}:{server.port}{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Worker Terhubung  : {Colors.BOLD}{Colors.BRIGHT_WHITE}{len(workers)} node{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Auto-Discovery    : {Colors.BRIGHT_GREEN}AKTIF (UDP 5002 - Infinity Search & Beacon){Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Worker Terhubung  : {Colors.BOLD}{Colors.BRIGHT_GREEN if workers else Colors.BRIGHT_WHITE}{worker_text}{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} File unsorted.txt : {unsorted_status}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} File sorted.txt   : {sorted_status}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Pratinjau Data    : {preview_str}")
