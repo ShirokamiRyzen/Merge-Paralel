@@ -167,6 +167,8 @@ class MasterBeacon:
 
     def _get_matching_ip(self, client_ip: str) -> str:
         """Memilih IP Master yang satu subnet dengan Worker."""
+        if client_ip == "127.0.0.1":
+            return "127.0.0.1"
         try:
             c_prefix = ".".join(client_ip.split(".")[:3])
             for my_ip in get_all_local_ips():
@@ -332,19 +334,29 @@ class WorkerScanner:
                 data, addr = self.sock.recvfrom(2048)
                 msg = json.loads(data.decode("utf-8"))
                 if msg.get("type") == "MASTER_ANNOUNCE" and "ip" in msg and "port" in msg:
-                    # Jika Master mengembalikan 127.0.0.1 tapi datang dari remote host, pakai addr[0]
                     reported_ip = msg["ip"]
-                    if reported_ip == "127.0.0.1" and addr[0] != "127.0.0.1":
+                    m_name = msg.get("name", "Master-Node")
+                    port = msg["port"]
+
+                    # Jika dari mesin lokal yang sama (hostname sama atau loopback)
+                    if m_name == socket.gethostname() or addr[0] == "127.0.0.1":
+                        reported_ip = "127.0.0.1"
+                    elif reported_ip == "127.0.0.1" and addr[0] != "127.0.0.1":
                         reported_ip = addr[0]
 
-                    key = f"{reported_ip}:{msg['port']}"
+                    # Deduplikasi master berdasarkan hostname & port
+                    key = f"{m_name}:{port}"
                     with self.lock:
-                        self.masters[key] = {
-                            "name": msg.get("name", "Master-Node"),
-                            "ip": reported_ip,
-                            "port": msg["port"],
-                            "last_seen": now
-                        }
+                        # Jika sudah ada entri dengan key yang sama, pertahankan 127.0.0.1 jika lokal
+                        if key in self.masters and self.masters[key]["ip"] == "127.0.0.1" and reported_ip != "127.0.0.1":
+                            self.masters[key]["last_seen"] = now
+                        else:
+                            self.masters[key] = {
+                                "name": m_name,
+                                "ip": reported_ip,
+                                "port": port,
+                                "last_seen": now
+                            }
             except (socket.timeout, json.JSONDecodeError, ConnectionResetError, OSError):
                 pass
             except Exception:

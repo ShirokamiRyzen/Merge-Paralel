@@ -8,6 +8,7 @@ Client Node (Worker) untuk Sistem Distributed Merge Sort.
 - Dilengkapi progress bar di setiap tahap komputasi.
 """
 
+import os
 import sys
 import time
 import socket
@@ -202,7 +203,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
     menjalankan instruksi sorting secara terdistribusi.
     """
     if not worker_name:
-        worker_name = socket.gethostname()
+        worker_name = f"{socket.gethostname()}-Tab{os.getpid() % 1000}"
 
     print_header("WORKER NODE - DISTRIBUTED CLIENT", f"Node: {worker_name} | Target Master: {host}:{port}")
 
@@ -251,7 +252,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 chunk_id = packet.get("chunk_id", 0)
                 n_items = len(data_chunk)
 
-                print_header(f"TUGAS KOMPUTASI: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer")
+                print_header(f"TUGAS KOMPUTASI PARALEL: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | Node: {worker_name}")
                 print_progress_bar(1, 3, prefix="Penerimaan Paket TCP", suffix="Selesai (1/3)")
 
                 t_start = time.perf_counter()
@@ -259,7 +260,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 t_end = time.perf_counter()
                 sort_duration = t_end - t_start
 
-                print_progress_bar(2, 3, prefix="Timsort Lokal RAM", suffix=f"{sort_duration:.4f} dtk (2/3)")
+                print_progress_bar(2, 3, prefix="Timsort Paralel RAM", suffix=f"{sort_duration:.4f} dtk (2/3)")
 
                 response = {
                     "status": "OK",
@@ -272,7 +273,8 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 if send_packet(sock, response):
                     t_send_end = time.perf_counter()
                     print_progress_bar(3, 3, prefix="Pengiriman Balik TCP", suffix=f"{t_send_end - t_send_start:.4f} dtk (3/3)")
-                    print_success(f"Chunk #{chunk_id} berhasil diproses & dikembalikan ke Master!\n")
+                    print_success(f"Chunk #{chunk_id} ({n_items:,} data) berhasil diurutkan & dikembalikan ke Master!")
+                    print_info(f"Worker kembali STANDBY. Siap menerima tugas sorting berikutnya...\n")
                 else:
                     print_error("Gagal mengirim data kembali ke Master.")
                     break

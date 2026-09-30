@@ -153,9 +153,9 @@ class MasterServer:
                 client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
                 reg_data = recv_packet(client_sock)
-                worker_name = f"Worker-{worker_counter}"
-                if isinstance(reg_data, dict) and reg_data.get("name"):
-                    worker_name = reg_data.get("name")
+                raw_name = reg_data.get("name") if isinstance(reg_data, dict) and reg_data.get("name") else f"Node"
+                # Beri nama unik dengan ID dan nama perangkat agar tidak rancu saat multi-tab lokal
+                worker_name = f"Worker-{worker_counter} ({raw_name})"
 
                 worker_info = {
                     "id": worker_counter,
@@ -179,8 +179,33 @@ class MasterServer:
                     break
 
     def get_active_workers(self) -> List[Dict[str, Any]]:
-        """Mengembalikan salinan daftar worker yang aktif."""
+        """Mengembalikan salinan daftar worker yang terdaftar."""
         with self.workers_lock:
+            return list(self.workers)
+
+    def get_live_workers(self) -> List[Dict[str, Any]]:
+        """
+        Memeriksa koneksi seluruh worker secara aktif (health check PING).
+        Menghapus worker yang sudah terputus sebelum komputasi dimulai.
+        """
+        with self.workers_lock:
+            live = []
+            for w in list(self.workers):
+                try:
+                    w["sock"].settimeout(0.3)
+                    if send_packet(w["sock"], {"cmd": "PING"}):
+                        resp = recv_packet(w["sock"])
+                        if resp and resp.get("status") == "PONG":
+                            w["sock"].settimeout(None)
+                            live.append(w)
+                            continue
+                except Exception:
+                    pass
+                try:
+                    w["sock"].close()
+                except Exception:
+                    pass
+            self.workers = live
             return list(self.workers)
 
     def remove_dead_worker(self, worker_info: Dict[str, Any]):
@@ -305,20 +330,21 @@ def run_distributed_sorting(server: MasterServer, data: List[int]) -> Optional[T
     Mode Terdistribusi:
     Dilengkapi PROGRESS BAR di setiap tahapan (partisi, transmisi, komputasi worker, merge).
     """
-    active_workers = server.get_active_workers()
+    # 1. Bersihkan worker yang terputus dan ambil hanya worker yang benar-benar aktif
+    active_workers = server.get_live_workers()
     k = len(active_workers)
 
     print_header("KOMPUTASI PARALEL / DISTRIBUTED SORTING", f"Distribusi ke {k} Worker Node via TCP/IP")
     print(f" {Colors.CYAN}•{Colors.RESET} Jumlah Data        : {Colors.BOLD}{len(data):,} elemen{Colors.RESET}")
     print(f" {Colors.CYAN}•{Colors.RESET} Pratinjau Asli      : {format_data_preview(data)}")
-    print(f" {Colors.CYAN}•{Colors.RESET} Jumlah Worker (K)  : {Colors.BOLD}{Colors.BRIGHT_GREEN}{k} node{Colors.RESET}")
+    print(f" {Colors.CYAN}•{Colors.RESET} Jumlah Worker (K)  : {Colors.BOLD}{Colors.BRIGHT_GREEN}{k} node aktif{Colors.RESET}")
 
     if k == 0:
-        print_error("Belum ada worker yang terhubung ke Master!")
-        print_info(f"Hubungkan worker: python main.py (pilih [2]) atau python worker.py --host {server.local_ip}")
+        print_error("Belum ada worker aktif yang terhubung ke Master!")
+        print_info(f"Hubungkan worker: python main.py (pilih [2])")
         return None
 
-    # 1. Partisi data ke K worker dengan Progress Bar
+    # 2. Partisi data ke K worker dengan Progress Bar
     chunk_size = len(data) // k
     remainder = len(data) % k
     chunks = []
@@ -331,12 +357,15 @@ def run_distributed_sorting(server: MasterServer, data: List[int]) -> Optional[T
 
     t_dist_total_start = time.perf_counter()
 
-    # 2. Distribusi & Komputasi Paralel ke Worker dengan Progress Bar per worker selesai
+    # 3. Distribusi & Komputasi Paralel ke Seluruh Worker Secara BERSAMAAN
     results = []
     failed_workers = []
     completed_count = 0
 
-    print_task("Mengirim chunk & memproses secara paralel di seluruh worker node...")
+    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Memulai Pengiriman Paralel ke {k} Worker Node Bersamaan:{Colors.RESET}")
+    for i in range(k):
+        print(f"  {Colors.BRIGHT_CYAN}➔{Colors.RESET} Mengirim {len(chunks[i]):,} data (Chunk #{i+1}) ke {Colors.BOLD}{active_workers[i]['name']}{Colors.RESET}...")
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=k) as executor:
         future_to_worker = {
             executor.submit(_worker_sort_task, active_workers[i], chunks[i], i + 1): active_workers[i]
@@ -361,10 +390,27 @@ def run_distributed_sorting(server: MasterServer, data: List[int]) -> Optional[T
         print_error("Pengurutan terdistribusi gagal karena ada worker yang terputus.")
         return None
 
+    # Urutkan results berdasarkan chunk_id agar terstruktur
+    results.sort(key=lambda x: x["chunk_id"])
+
     t_network_done = time.perf_counter()
     network_and_sort_time = t_network_done - t_dist_total_start
 
-    # 3. K-Way Merge di Master dengan Progress Bar
+    # Tabel Rincian Eksekusi Paralel Tiap Worker
+    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Rincian Eksekusi Paralel Seluruh Worker:{Colors.RESET}")
+    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+    print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {'Chunk':<8} | {'Nama Worker Node':<28} | {'Jumlah Data':<15} | {'Sort RAM':<10} | {'Roundtrip':<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+    for r in results:
+        c_tag = f"#{r['chunk_id']}"
+        w_name = r["worker_name"][:28]
+        c_len = f"{len(r['sorted_chunk']):,} data"
+        s_time = f"{r['worker_sort_time']:.4f}s"
+        r_time = f"{r['roundtrip_time']:.4f}s"
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {c_tag:<8} | {w_name:<28} | {c_len:<15} | {s_time:<10} | {r_time:<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+
+    # 4. K-Way Merge di Master dengan Progress Bar
     t_merge_start = time.perf_counter()
     sorted_chunks = [r["sorted_chunk"] for r in results]
 
