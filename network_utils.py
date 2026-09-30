@@ -61,17 +61,65 @@ def recv_packet(sock: socket.socket) -> Optional[Any]:
         return None
 
 
-def get_local_ip() -> str:
-    """Mendapatkan alamat IP lokal LAN dari mesin."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def get_all_local_ips() -> List[str]:
+    """Mendapatkan semua alamat IP lokal non-loopback yang aktif pada mesin."""
+    ips = set()
+    # 1. Probe socket ke gateway/DNS umum tanpa mengirim data internet nyata
+    test_destinations = [
+        ("8.8.8.8", 80),
+        ("1.1.1.1", 80),
+        ("192.168.43.1", 80),  # IP default Hotspot Android
+        ("172.20.10.1", 80),   # IP default Hotspot iPhone
+        ("192.168.1.1", 80),
+        ("192.168.0.1", 80)
+    ]
+    for host, port in test_destinations:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((host, port))
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+            s.close()
+        except Exception:
+            pass
+
+    # 2. Ambil dari getaddrinfo hostname
     try:
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
     except Exception:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
+        pass
+
+    # 3. Ambil dari gethostbyname_ex
+    try:
+        _, _, host_ips = socket.gethostbyname_ex(socket.gethostname())
+        for ip in host_ips:
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+
+    result = list(ips)
+    return result if result else ["127.0.0.1"]
+
+
+def get_local_ip() -> str:
+    """Mendapatkan alamat IP lokal LAN utama dari mesin."""
+    all_ips = get_all_local_ips()
+    # Prioritaskan IP Wi-Fi/Hotspot (192.168.x.x, 172.20.x.x, 10.x.x.x)
+    for ip in all_ips:
+        if ip.startswith("192.168.43."):  # Hotspot Android
+            return ip
+        if ip.startswith("172.20.10."):  # Hotspot iPhone
+            return ip
+    for ip in all_ips:
+        if ip.startswith("192.168.") or ip.startswith("172.") or ip.startswith("10."):
+            return ip
+    return all_ips[0] if all_ips else "127.0.0.1"
 
 
 def get_broadcast_ip(local_ip: str) -> str:
@@ -85,11 +133,22 @@ def get_broadcast_ip(local_ip: str) -> str:
     return "255.255.255.255"
 
 
+def get_gateway_ip(local_ip: str) -> str:
+    """Mendapatkan perkiraan alamat IP Gateway (biasanya HP Hotspot di .1)."""
+    try:
+        parts = local_ip.split(".")
+        if len(parts) == 4 and parts[0] != "127":
+            return f"{parts[0]}.{parts[1]}.{parts[2]}.1"
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 class MasterBeacon:
     """
     Layanan Auto-Discovery di sisi Master:
     - Menjawab probe pencarian worker melalui UDP.
-    - Menyiarkan heartbeat announce setiap 1.0 detik ke subnet LAN.
+    - Menyiarkan announce berkala ke broadcast, gateway (HP hotspot), dan subnet sweep.
     """
     def __init__(self, master_name: str, master_ip: str, tcp_port: int, discovery_port: int = DEFAULT_DISCOVERY_PORT):
         self.master_name = master_name
@@ -106,49 +165,69 @@ class MasterBeacon:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
+    def _get_matching_ip(self, client_ip: str) -> str:
+        """Memilih IP Master yang satu subnet dengan Worker."""
+        try:
+            c_prefix = ".".join(client_ip.split(".")[:3])
+            for my_ip in get_all_local_ips():
+                if ".".join(my_ip.split(".")[:3]) == c_prefix:
+                    return my_ip
+        except Exception:
+            pass
+        return self.master_ip
+
     def _run(self):
         try:
             self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             self.udp_sock.bind(("0.0.0.0", self.discovery_port))
-            self.udp_sock.settimeout(0.5)
+            self.udp_sock.settimeout(0.4)
         except Exception:
             return
-
-        payload_dict = {
-            "type": "MASTER_ANNOUNCE",
-            "name": self.master_name,
-            "ip": self.master_ip,
-            "port": self.tcp_port
-        }
-        msg_bytes = json.dumps(payload_dict).encode("utf-8")
-
-        bcast_destinations = [
-            ("255.255.255.255", self.discovery_port),
-            ("<broadcast>", self.discovery_port),
-            (get_broadcast_ip(self.master_ip), self.discovery_port),
-            ("127.0.0.1", self.discovery_port),
-        ]
 
         last_bcast = 0.0
 
         while self.is_running:
             now = time.time()
-            # 1. Kirim periodic broadcast hanya setiap 1.0 detik
+
+            # 1. Kirim periodic beacon announce setiap 1.0 detik
             if now - last_bcast >= 1.0:
-                for dest in bcast_destinations:
-                    try:
-                        self.udp_sock.sendto(msg_bytes, dest)
-                    except Exception:
-                        pass
+                all_ips = get_all_local_ips()
+                for cur_ip in all_ips:
+                    payload = json.dumps({
+                        "type": "MASTER_ANNOUNCE",
+                        "name": self.master_name,
+                        "ip": cur_ip,
+                        "port": self.tcp_port
+                    }).encode("utf-8")
+
+                    targets = [
+                        ("255.255.255.255", self.discovery_port),
+                        ("<broadcast>", self.discovery_port),
+                        (get_broadcast_ip(cur_ip), self.discovery_port),
+                        (get_gateway_ip(cur_ip), self.discovery_port),  # Gateway Android Hotspot
+                        ("127.0.0.1", self.discovery_port),
+                    ]
+                    for dest in targets:
+                        try:
+                            self.udp_sock.sendto(payload, dest)
+                        except Exception:
+                            pass
                 last_bcast = now
 
             # 2. Dengarkan permintaan DISCOVER dari worker
             try:
                 data, addr = self.udp_sock.recvfrom(2048)
                 if b"DISCOVER_MERGE_SORT_MASTER" in data:
-                    self.udp_sock.sendto(msg_bytes, addr)
+                    chosen_ip = self._get_matching_ip(addr[0])
+                    reply_payload = json.dumps({
+                        "type": "MASTER_ANNOUNCE",
+                        "name": self.master_name,
+                        "ip": chosen_ip,
+                        "port": self.tcp_port
+                    }).encode("utf-8")
+                    self.udp_sock.sendto(reply_payload, addr)
             except (socket.timeout, ConnectionResetError, OSError):
                 pass
             except Exception:
@@ -180,7 +259,8 @@ def discover_masters(timeout: float = 1.5, discovery_port: int = DEFAULT_DISCOVE
 class WorkerScanner:
     """
     Pemindai Master Berkelanjutan (Infinity Scanner) untuk Worker Node:
-    - Terus memindai subnet LAN di background thread.
+    - Menggunakan UDP Broadcast + Subnet Unicast Sweep + Gateway Direct Ping.
+    - Menembus AP Isolation / Hotspot Android / iPhone tethering secara 100%.
     - Menjaga daftar Master yang aktif dan otomatis menghapus Master yang offline (> 4 detik).
     """
     def __init__(self, discovery_port: int = DEFAULT_DISCOVERY_PORT):
@@ -190,7 +270,6 @@ class WorkerScanner:
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
         self.sock: Optional[socket.socket] = None
-        self.local_ip = get_local_ip()
 
     def start(self):
         """Memulai background thread scanner."""
@@ -204,40 +283,65 @@ class WorkerScanner:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             self.sock.bind(("0.0.0.0", 0))  # port acak untuk worker
-            self.sock.settimeout(0.4)
+            self.sock.settimeout(0.3)
         except Exception:
             return
 
         query = b"DISCOVER_MERGE_SORT_MASTER"
-        probe_destinations = [
-            ("255.255.255.255", self.discovery_port),
-            ("<broadcast>", self.discovery_port),
-            (get_broadcast_ip(self.local_ip), self.discovery_port),
-            ("127.0.0.1", self.discovery_port),
-        ]
         last_probe = 0.0
+        last_sweep = 0.0
 
         while self.is_running:
             now = time.time()
-            # Kirim probe pencarian setiap 0.8 detik
+            all_ips = get_all_local_ips()
+
+            # 1. Kirim probe broadcast & gateway setiap 0.8 detik
             if now - last_probe >= 0.8:
-                for dest in probe_destinations:
-                    try:
-                        self.sock.sendto(query, dest)
-                    except Exception:
-                        pass
+                for cur_ip in all_ips:
+                    probe_destinations = [
+                        ("255.255.255.255", self.discovery_port),
+                        ("<broadcast>", self.discovery_port),
+                        (get_broadcast_ip(cur_ip), self.discovery_port),
+                        (get_gateway_ip(cur_ip), self.discovery_port),  # Gateway Android Hotspot (192.168.43.1)
+                        ("127.0.0.1", self.discovery_port),
+                    ]
+                    for dest in probe_destinations:
+                        try:
+                            self.sock.sendto(query, dest)
+                        except Exception:
+                            pass
                 last_probe = now
 
-            # Terima respons dari Master
+            # 2. Subnet Unicast Sweep setiap 2.0 detik (Tembus AP Isolation Hotspot HP)
+            if now - last_sweep >= 2.0:
+                for cur_ip in all_ips:
+                    if not cur_ip.startswith("127."):
+                        parts = cur_ip.split(".")
+                        if len(parts) == 4:
+                            prefix = f"{parts[0]}.{parts[1]}.{parts[2]}"
+                            # Kirim unicast ke host 1-254 (hanya butuh ~5 milidetik)
+                            for i in range(1, 255):
+                                try:
+                                    self.sock.sendto(query, (f"{prefix}.{i}", self.discovery_port))
+                                except Exception:
+                                    pass
+                last_sweep = now
+
+            # 3. Terima respons dari Master
             try:
                 data, addr = self.sock.recvfrom(2048)
                 msg = json.loads(data.decode("utf-8"))
                 if msg.get("type") == "MASTER_ANNOUNCE" and "ip" in msg and "port" in msg:
-                    key = f"{msg['ip']}:{msg['port']}"
+                    # Jika Master mengembalikan 127.0.0.1 tapi datang dari remote host, pakai addr[0]
+                    reported_ip = msg["ip"]
+                    if reported_ip == "127.0.0.1" and addr[0] != "127.0.0.1":
+                        reported_ip = addr[0]
+
+                    key = f"{reported_ip}:{msg['port']}"
                     with self.lock:
                         self.masters[key] = {
                             "name": msg.get("name", "Master-Node"),
-                            "ip": msg["ip"],
+                            "ip": reported_ip,
                             "port": msg["port"],
                             "last_seen": now
                         }

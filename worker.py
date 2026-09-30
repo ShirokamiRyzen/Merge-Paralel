@@ -102,6 +102,7 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
                     if ch in (b"\r", b"\n"):
                         sys.stdout.write("\n")
                         choice = buffer.strip()
+                        buffer = ""
                         if not choice:
                             choice = "1" if masters else ""
 
@@ -117,6 +118,13 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
                                 return manual_ip, manual_port
                             except Exception:
                                 return None
+                        # Jika pengguna langsung mengetik format IP (misal: 192.168.43.1)
+                        elif "." in choice and len(choice.split(".")) == 4:
+                            scanner.stop()
+                            ip_parts = choice.split(":")
+                            target_ip = ip_parts[0].strip()
+                            target_port = int(ip_parts[1].strip()) if len(ip_parts) > 1 else DEFAULT_MASTER_PORT
+                            return target_ip, target_port
                         else:
                             try:
                                 sel_idx = int(choice) - 1
@@ -124,10 +132,8 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
                                     chosen = masters[sel_idx]
                                     scanner.stop()
                                     return chosen["ip"], chosen["port"]
-                                else:
-                                    buffer = ""
                             except ValueError:
-                                buffer = ""
+                                pass
                     # Backspace ditekan
                     elif ch in (b"\x08", b"\x7f"):
                         if buffer:
@@ -146,7 +152,41 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
                             pass
                 time.sleep(0.08)
             else:
-                time.sleep(0.3)
+                # Dukungan untuk HP Android (Termux) / Linux / macOS
+                try:
+                    import select
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.15)
+                    if rlist:
+                        raw_in = sys.stdin.readline().strip()
+                        if not raw_in and masters:
+                            raw_in = "1"
+
+                        if raw_in == "0":
+                            scanner.stop()
+                            return None
+                        elif raw_in.upper() == "M":
+                            scanner.stop()
+                            manual_ip = input(f"\n{Colors.BRIGHT_YELLOW}Masukkan IP Master: {Colors.RESET}").strip()
+                            manual_port_str = input(f"{Colors.BRIGHT_YELLOW}Masukkan Port [{DEFAULT_MASTER_PORT}]: {Colors.RESET}").strip()
+                            manual_port = int(manual_port_str) if manual_port_str else DEFAULT_MASTER_PORT
+                            return manual_ip, manual_port
+                        elif "." in raw_in and len(raw_in.split(".")) == 4:
+                            scanner.stop()
+                            ip_parts = raw_in.split(":")
+                            target_ip = ip_parts[0].strip()
+                            target_port = int(ip_parts[1].strip()) if len(ip_parts) > 1 else DEFAULT_MASTER_PORT
+                            return target_ip, target_port
+                        else:
+                            try:
+                                sel_idx = int(raw_in) - 1
+                                if 0 <= sel_idx < len(masters):
+                                    chosen = masters[sel_idx]
+                                    scanner.stop()
+                                    return chosen["ip"], chosen["port"]
+                            except ValueError:
+                                pass
+                except Exception:
+                    time.sleep(0.2)
 
     except KeyboardInterrupt:
         scanner.stop()
@@ -172,11 +212,16 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
     try:
         print_task(f"Menghubungkan ke Master pada {Colors.BOLD}{host}:{port}{Colors.RESET} ...")
+        sock.settimeout(5.0)  # Timeout 5 detik agar tidak freeze lama jika IP/firewall bermasalah
         sock.connect((host, port))
+        sock.settimeout(None)  # Kembalikan ke mode blocking untuk transfer data
         print_success("Berhasil terhubung ke Master Server!")
     except Exception as err:
         print_error(f"Gagal terhubung ke Master ({host}:{port}): {err}")
-        print_info("Pastikan master.py sudah berjalan dan firewall tidak memblokir port.")
+        print_info(f"Petunjuk:")
+        print(f"  1. Pastikan kedua perangkat berada di jaringan Wi-Fi / Hotspot yang sama.")
+        print(f"  2. Jika Laptop sebagai Master: Periksa Windows Firewall (izinkan port 5000 TCP).")
+        print(f"  3. Pastikan alamat IP Master ({host}) sudah benar dan opsi [1] Master aktif.")
         return
 
     # Kirim pesan registrasi awal ke Master

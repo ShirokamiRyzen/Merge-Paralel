@@ -96,3 +96,29 @@ Di panel kontrol Master Laptop 1:
 - Pilih **`[2]`** untuk menguji Serial Sorting (tersimpan ke `sorted.txt`).
 - Pilih **`[3]`** untuk menguji Distributed Sorting bersama Worker (tersimpan ke `sorted.txt`).
 - Tabel metrik evaluasi kecepatan (**Speedup** dan **Efisiensi**) akan langsung ditampilkan.
+
+---
+
+## 📱 4. Panduan Khusus Konektivitas HP (Android / Termux) & Laptop
+
+Jika menggunakan **HP (Hotspot Tethering)** atau **HP sebagai Worker/Master (Termux)**:
+
+1. **Jaringan Hotspot HP**:
+   - Jika HP bertindak sebagai Hotspot Tethering, hubungkan Laptop ke Hotspot HP tersebut.
+   - Sistem sudah dilengkapi **Subnet Unicast Sweep** sehingga mampu menembus batasan isolasi broadcast (*AP Isolation*) pada Hotspot Android secara otomatis.
+   - Di sisi Worker, jika Master sudah terdeteksi di list, cukup tekan **`[Enter]`**.
+   - Jika Master belum muncul otomatis (karena restriksi jaringan tertentu), **Anda bisa langsung mengetik alamat IP Master yang tertera di layar Master** (contoh: `192.168.43.1` atau `192.168.43.15`) lalu tekan **`[Enter]`**.
+
+2. **Dukungan Terminal HP (Termux Android)**:
+   - Program sudah 100% mendukung Termux Android (menggunakan pembacaan input non-blocking Unix `select`).
+
+3. **Catatan Windows Defender Firewall (Jika Laptop sebagai Master)**:
+   - Saat terhubung ke Hotspot HP, Windows sering menganggap jaringan sebagai *Public Network* dan memblokir port masuk.
+   - Jika HP gagal terhubung ke Laptop:
+     - Izinkan aplikasi Python di Windows Defender Firewall, atau
+     - Buka PowerShell (Run as Administrator) dan jalankan:
+       ```powershell
+       New-NetFirewallRule -DisplayName "MergeSort TCP" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow
+       New-NetFirewallRule -DisplayName "MergeSort UDP" -Direction Inbound -LocalPort 5002 -Protocol UDP -Action Allow
+       ```
+

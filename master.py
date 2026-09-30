@@ -20,7 +20,7 @@ import threading
 import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 
-from network_utils import send_packet, recv_packet, MasterBeacon, DEFAULT_MASTER_PORT
+from network_utils import send_packet, recv_packet, MasterBeacon, DEFAULT_MASTER_PORT, get_local_ip, get_all_local_ips
 from cli_ui import (
     Colors, banner, clear_screen, print_header, print_success, print_info, 
     print_warning, print_error, print_task, print_table_row, print_table_footer,
@@ -31,19 +31,6 @@ DEFAULT_PORT = 5000
 DEFAULT_DATA_SIZE = 1_000_000
 FILE_UNSORTED = "unsorted.txt"
 FILE_SORTED = "sorted.txt"
-
-
-def get_local_ip() -> str:
-    """Mendapatkan alamat IP lokal LAN dari mesin Master."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
 
 
 def is_sorted(arr: List[int]) -> bool:
@@ -483,8 +470,11 @@ def run_master_cli(port: int = DEFAULT_PORT):
                 w_names += f" +{len(workers)-2}"
             worker_text += f" ({w_names})"
 
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Alamat IP Master  : {Colors.BOLD}{Colors.BRIGHT_GREEN}{server.local_ip}:{server.port}{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Auto-Discovery    : {Colors.BRIGHT_GREEN}AKTIF (UDP 5002 - Infinity Search & Beacon){Colors.RESET}")
+        server.all_ips = get_all_local_ips()
+        ip_list_str = " | ".join(f"{ip}:{server.port}" for ip in server.all_ips[:3])
+
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Alamat IP Master  : {Colors.BOLD}{Colors.BRIGHT_GREEN}{ip_list_str}{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Auto-Discovery    : {Colors.BRIGHT_GREEN}AKTIF (UDP 5002 - Beacon & Subnet Sweep){Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} Worker Terhubung  : {Colors.BOLD}{Colors.BRIGHT_GREEN if workers else Colors.BRIGHT_WHITE}{worker_text}{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} File unsorted.txt : {unsorted_status}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} File sorted.txt   : {sorted_status}")
@@ -495,6 +485,7 @@ def run_master_cli(port: int = DEFAULT_PORT):
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Jalankan Distributed Sorting{Colors.RESET} (Simpan ke {FILE_SORTED})       {Colors.BRIGHT_BLUE}|{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar / Matikan Master                                          {Colors.BRIGHT_BLUE}|{Colors.RESET}")
         print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+        print(f" {Colors.DIM}💡 Tips HP Hotspot: Di Worker, Anda bisa langsung ketik IP Master di atas lalu [Enter]{Colors.RESET}")
 
         if notification:
             if is_notif_warning:
