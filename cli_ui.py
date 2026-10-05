@@ -64,14 +64,62 @@ def banner():
     print(f"{Colors.BRIGHT_CYAN}{line}{Colors.RESET}")
 
 
-def print_header(title: str, subtitle: str = ""):
+import re
+
+ANSI_REGEX = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def strip_ansi(text: str) -> str:
+    """Menghapus kode ANSI escape untuk menghitung panjang karakter visual sebenarnya."""
+    return ANSI_REGEX.sub("", str(text))
+
+
+def visible_length(text: str) -> int:
+    """Menghitung panjang visual teks di terminal dengan mengabaikan ANSI escape codes."""
+    return len(strip_ansi(text))
+
+
+def pad_ansi(text: str, width: int, align: str = "left") -> str:
+    """Melakukan padding teks dengan memperhitungkan panjang kode warna ANSI."""
+    vlen = visible_length(text)
+    pad = max(0, width - vlen)
+    if align == "center":
+        left = pad // 2
+        right = pad - left
+        return f"{' ' * left}{text}{' ' * right}"
+    elif align == "right":
+        return f"{' ' * pad}{text}"
+    else:
+        return f"{text}{' ' * pad}"
+
+
+BOX_WIDTH = 70  # Lebar standar isi kotak (tanpa border luar)
+
+
+def box_border(width: int = BOX_WIDTH, color: str = Colors.BRIGHT_BLUE) -> str:
+    """Membuat garis horizontal batas kotak (+------+)."""
+    return f" {color}+{'-' * (width + 2)}+{Colors.RESET}"
+
+
+def box_line(content: str, width: int = BOX_WIDTH, color: str = Colors.BRIGHT_BLUE) -> str:
+    """Membuat satu baris teks dalam kotak dengan border '|' kiri dan kanan yang lurus sempurna."""
+    padded = pad_ansi(content, width, align="left")
+    return f" {color}|{Colors.RESET} {padded} {color}|{Colors.RESET}"
+
+
+def box_title(title: str, width: int = BOX_WIDTH, color: str = Colors.BRIGHT_BLUE) -> str:
+    """Membuat satu baris judul yang diposisikan di tengah kotak."""
+    padded = pad_ansi(title, width, align="center")
+    return f" {color}|{Colors.RESET} {padded} {color}|{Colors.RESET}"
+
+
+def print_header(title: str, subtitle: str = "", width: int = BOX_WIDTH):
     """Mencetak header box yang rapi dan aman di semua terminal Windows."""
-    width = 65
-    print(f"\n{Colors.BRIGHT_BLUE}+{'-' * (width - 2)}+{Colors.RESET}")
-    print(f"{Colors.BRIGHT_BLUE}|{Colors.BOLD}{Colors.BRIGHT_WHITE}{title.center(width - 2)}{Colors.RESET}{Colors.BRIGHT_BLUE}|{Colors.RESET}")
+    print(f"\n{box_border(width)}")
+    print(box_title(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}{title}{Colors.RESET}", width))
     if subtitle:
-        print(f"{Colors.BRIGHT_BLUE}|{Colors.DIM}{Colors.CYAN}{subtitle.center(width - 2)}{Colors.RESET}{Colors.BRIGHT_BLUE}|{Colors.RESET}")
-    print(f"{Colors.BRIGHT_BLUE}+{'-' * (width - 2)}+{Colors.RESET}")
+        print(box_title(f"{Colors.DIM}{Colors.CYAN}{subtitle}{Colors.RESET}", width))
+    print(box_border(width))
 
 
 def print_success(msg: str):
@@ -95,21 +143,25 @@ def print_task(msg: str):
 
 
 def print_table_row(col1: str, col2: str, width1: int = 36, width2: int = 24, is_header: bool = False):
-    """Mencetak baris tabel bergaya box aman encoding."""
+    """Mencetak baris tabel bergaya box aman encoding dan lurus dengan ANSI escape codes."""
     if is_header:
-        border_top = f"{Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
-        content = f"{Colors.BRIGHT_CYAN}| {Colors.BOLD}{Colors.BRIGHT_WHITE}{col1:<{width1}}{Colors.RESET} {Colors.BRIGHT_CYAN}| {Colors.BOLD}{Colors.BRIGHT_WHITE}{col2:<{width2}}{Colors.RESET} {Colors.BRIGHT_CYAN}|{Colors.RESET}"
-        border_mid = f"{Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
+        border_top = f" {Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
+        col1_pad = pad_ansi(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}{col1}{Colors.RESET}", width1)
+        col2_pad = pad_ansi(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}{col2}{Colors.RESET}", width2)
+        content = f" {Colors.BRIGHT_CYAN}|{Colors.RESET} {col1_pad} {Colors.BRIGHT_CYAN}|{Colors.RESET} {col2_pad} {Colors.BRIGHT_CYAN}|{Colors.RESET}"
+        border_mid = f" {Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
         print(border_top)
         print(content)
         print(border_mid)
     else:
-        content = f"{Colors.BRIGHT_CYAN}|{Colors.RESET} {col1:<{width1}} {Colors.BRIGHT_CYAN}|{Colors.RESET} {Colors.BOLD}{col2:<{width2}}{Colors.RESET} {Colors.BRIGHT_CYAN}|{Colors.RESET}"
+        col1_pad = pad_ansi(col1, width1)
+        col2_pad = pad_ansi(col2, width2)
+        content = f" {Colors.BRIGHT_CYAN}|{Colors.RESET} {col1_pad} {Colors.BRIGHT_CYAN}|{Colors.RESET} {col2_pad} {Colors.BRIGHT_CYAN}|{Colors.RESET}"
         print(content)
 
 
 def print_table_footer(width1: int = 36, width2: int = 24):
-    border_bot = f"{Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
+    border_bot = f" {Colors.BRIGHT_CYAN}+{'-' * (width1 + 2)}+{'-' * (width2 + 2)}+{Colors.RESET}"
     print(border_bot)
 
 

@@ -13,12 +13,44 @@ import sys
 import time
 import socket
 import argparse
-from typing import Optional, Tuple
+import concurrent.futures
+from typing import Optional, Tuple, List
 from network_utils import send_packet, recv_packet, discover_masters, WorkerScanner, DEFAULT_MASTER_PORT, get_local_ip, tune_socket
 from cli_ui import (
     Colors, banner, clear_screen, print_header, print_success, print_info, 
-    print_warning, print_error, print_task, print_progress_bar
+    print_warning, print_error, print_task, print_progress_bar,
+    box_border, box_line, box_title
 )
+
+
+def parallel_sort_data(arr: List[int], n_threads: Optional[int] = None) -> List[int]:
+    """
+    Mengurutkan array angka menggunakan seluruh thread CPU yang tersedia.
+    Membagi array menjadi sub-chunk yang diproses secara simultan via ThreadPoolExecutor,
+    lalu digabungkan secara cepat dengan run-merge linear Timsort.
+    """
+    if n_threads is None:
+        n_threads = os.cpu_count() or 1
+    n = len(arr)
+    if n_threads <= 1 or n < 20_000:
+        arr.sort()
+        return arr
+
+    sub_chunk_size = n // n_threads
+    sub_chunks = []
+    for t in range(n_threads):
+        start = t * sub_chunk_size
+        end = n if t == n_threads - 1 else (t + 1) * sub_chunk_size
+        sub_chunks.append(arr[start:end])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+        list(executor.map(lambda c: c.sort(), sub_chunks))
+
+    merged = []
+    for sc in sub_chunks:
+        merged.extend(sc)
+    merged.sort()
+    return merged
 
 
 def select_or_discover_master() -> Optional[Tuple[str, int]]:
@@ -64,12 +96,13 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
 
                 if masters:
                     print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Daftar Master Aktif Terdeteksi ({len(masters)} server ditemukan):{Colors.RESET}")
-                    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+                    print(box_border())
                     for idx, m in enumerate(masters, 1):
                         name_str = m.get("name", "Master-Node")
                         ip_port_str = f"{m['ip']}:{m['port']}"
-                        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[{idx}]{Colors.RESET} {Colors.BOLD}{name_str:<18}{Colors.RESET} {Colors.BRIGHT_GREEN}{ip_port_str:<21}{Colors.RESET} {Colors.BRIGHT_GREEN}[ONLINE]{Colors.RESET}   {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-                    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
+                        row_str = f" {Colors.BRIGHT_CYAN}[{idx}]{Colors.RESET} {Colors.BOLD}{name_str:<20}{Colors.RESET} {Colors.BRIGHT_GREEN}{ip_port_str:<22}{Colors.RESET} {Colors.BRIGHT_GREEN}[ONLINE]{Colors.RESET}"
+                        print(box_line(row_str))
+                    print(box_border())
                     print(f"  {Colors.BRIGHT_YELLOW}[M]{Colors.RESET} Masukkan IP Master secara manual")
                     print(f"  {Colors.BRIGHT_RED}[0]{Colors.RESET} Batal / Kembali ke Menu Utama")
                     print(f"\n{Colors.DIM}-------------------------------------------------------------------{Colors.RESET}")
@@ -225,18 +258,20 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
         print(f"  3. Pastikan alamat IP Master ({host}) sudah benar dan opsi [1] Master aktif.")
         return
 
+    worker_threads = os.cpu_count() or 1
     # Kirim pesan registrasi awal ke Master
     handshake_payload = {
         "cmd": "REGISTER",
         "name": worker_name,
         "hostname": socket.gethostname(),
+        "threads": worker_threads,
     }
     if not send_packet(sock, handshake_payload):
         print_error("Gagal mengirim pesan registrasi ke Master.")
         sock.close()
         return
 
-    print_info(f"Worker siap ({Colors.BRIGHT_GREEN}STANDBY{Colors.RESET}). Menunggu tugas sorting dari Master...\n")
+    print_info(f"Worker siap ({Colors.BRIGHT_GREEN}STANDBY{Colors.RESET}). Menunggu tugas sorting...\n")
 
     try:
         while True:
@@ -251,25 +286,66 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
             cmd = packet.get("cmd")
 
-            if cmd == "SORT":
-                data_chunk = packet.get("data", [])
+            if cmd == "SORT_ON_FLY":
+                n_items = packet.get("count", 500_000)
                 chunk_id = packet.get("chunk_id", 0)
-                n_items = len(data_chunk)
+                seed = packet.get("seed", None)
 
-                print_header(f"TUGAS KOMPUTASI PARALEL: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | Node: {worker_name}")
-                print_progress_bar(1, 3, prefix="Penerimaan Stream TCP", suffix=f"{n_items:,} data diterima (1/3)")
+                print_header(f"TUGAS REALTIME ON-THE-FLY: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | {worker_name}")
+                print_progress_bar(1, 3, prefix="Generate On-The-Fly", suffix=f"{n_items:,} data dibangkitkan lokal RAM (1/3)")
 
                 t_start = time.perf_counter()
-                data_chunk.sort()
+                import random
+                rng = random.Random(seed) if seed is not None else random.Random()
+                data_chunk = [rng.randint(1, 10_000_000) for _ in range(n_items)]
+
+                print_progress_bar(2, 3, prefix="Proses Sorting", suffix="Mengurutkan data di RAM (2/3)")
+                data_chunk = parallel_sort_data(data_chunk, n_threads=worker_threads)
                 t_end = time.perf_counter()
                 sort_duration = t_end - t_start
-
-                print_progress_bar(2, 3, prefix="Timsort Paralel RAM", suffix=f"{sort_duration:.4f} dtk (2/3)")
 
                 response = {
                     "status": "OK",
                     "chunk_id": chunk_id,
                     "worker_name": worker_name,
+                    "threads": worker_threads,
+                    "sort_time": sort_duration,
+                    "data": data_chunk,
+                }
+                t_send_start = time.perf_counter()
+                if send_packet(
+                    sock, 
+                    response,
+                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Balik TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                ):
+                    t_send_end = time.perf_counter()
+                    print_progress_bar(3, 3, prefix="Pengiriman Balik TCP", suffix=f"{t_send_end - t_send_start:.4f} dtk (3/3)")
+                    print_success(f"Chunk #{chunk_id} ({n_items:,} data) berhasil diproses On-The-Fly & dikembalikan ke Master!")
+                    print_info(f"Worker kembali STANDBY. Siap menerima tugas sorting berikutnya...\n")
+                else:
+                    print_error("Gagal mengirim data kembali ke Master.")
+                    break
+
+            elif cmd == "SORT":
+                data_chunk = packet.get("data", [])
+                chunk_id = packet.get("chunk_id", 0)
+                n_items = len(data_chunk)
+
+                print_header(f"TUGAS KOMPUTASI PARALEL: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | {worker_name}")
+                print_progress_bar(1, 3, prefix="Penerimaan Stream TCP", suffix=f"{n_items:,} data diterima (1/3)")
+
+                t_start = time.perf_counter()
+                data_chunk = parallel_sort_data(data_chunk, n_threads=worker_threads)
+                t_end = time.perf_counter()
+                sort_duration = t_end - t_start
+
+                print_progress_bar(2, 3, prefix="Proses Sorting", suffix=f"Selesai ({sort_duration:.4f} dtk) (2/3)")
+
+                response = {
+                    "status": "OK",
+                    "chunk_id": chunk_id,
+                    "worker_name": worker_name,
+                    "threads": worker_threads,
                     "sort_time": sort_duration,
                     "data": data_chunk,
                 }

@@ -9,7 +9,7 @@ Pilih apakah komputer ini akan bertindak sebagai:
 
 import sys
 import socket
-from cli_ui import Colors, banner, clear_screen, print_header, print_info, print_warning
+from cli_ui import Colors, banner, clear_screen, print_header, print_info, print_warning, box_border, box_title, box_line
 from network_utils import get_local_ip, DEFAULT_MASTER_PORT
 import master
 import worker
@@ -24,13 +24,13 @@ def main():
         local_ip = get_local_ip()
 
         print(f"  {Colors.DIM}Perangkat: {socket.gethostname()} | IP Lokal: {local_ip}{Colors.RESET}\n")
-        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}                     {Colors.BOLD}{Colors.BRIGHT_WHITE}PILIH PERAN KOMPUTER INI{Colors.RESET}                      {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}MASTER NODE (Server){Colors.RESET} - Bangkitkan Data, Koordinasi & Sorting {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Infinity Scan Master & Urutkan Data  {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET}  {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar Program                                                {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------+{Colors.RESET}\n")
+        print(box_border())
+        print(box_title(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}PILIH PERAN KOMPUTER INI{Colors.RESET}"))
+        print(box_border())
+        print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}MASTER NODE (Server){Colors.RESET} - Pusat Kontrol & Koordinasi Sorting"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Infinity Scan Master & Urutkan Data"))
+        print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar Program"))
+        print(box_border())
 
         try:
             choice = input(f"{Colors.BRIGHT_YELLOW}Pilih opsi [1, 2, 0]: {Colors.RESET}").strip()
