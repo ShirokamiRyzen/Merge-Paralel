@@ -1,132 +1,166 @@
 # Sistem Distributed & Serial Sorting (TCP/IP Socket Programming)
 
 Proyek tugas besar mata kuliah **Komputasi Terdistribusi**.  
-Sistem ini mengimplementasikan algoritma **Distributed Merge Sort** menggunakan protokol jaringan TCP/IP murni (`socket` programming tanpa framework eksternal) dan membandingkan performanya secara langsung dengan **Serial Sorting**.
+Sistem ini mengimplementasikan algoritma **Distributed Merge Sort** menggunakan protokol jaringan TCP/IP murni (`socket` programming standar Python tanpa framework eksternal) dan membandingkan performanya secara langsung dengan **Serial Sorting**.
 
-Dilengkapi fitur **Auto-Discovery Jaringan**: Worker dapat mendeteksi Master secara otomatis tanpa perlu mengetik alamat IP secara manual!
-
----
-
-## 📌 1. Cara Kerja Sistem
-
-1. **Master Node (Server)**:
-   - Mengelola koneksi worker TCP socket (`0.0.0.0:5000`).
-   - Menjalankan **UDP Beacon** untuk menyiarkan keberadaan Master ke subnet Wi-Fi/LAN lokal.
-   - Otomatis mendeteksi client/worker yang bergabung secara *real-time*.
-   - Membangkitkan $N$ data integer acak **positif** (tanpa angka minus) dan menyimpannya ke **`unsorted.txt`**.
-   - **Mode Serial**: Mengurutkan data langsung di CPU master dan menyimpan hasil terurut ke **`sorted.txt`**.
-   - **Mode Terdistribusi**: Membagi data ke seluruh node komputasi dengan dukungan 2 mode:
-     * **Mode Hybrid (Master + Worker)**: Master CPU ikut memproses partisi secara lokal bersama Worker sehingga beban terbagi seimbang (tidak ada node idle) dan speedup optimal tercapai bahkan dengan 1 worker.
-     * **Mode Dedicated (Worker Murni)**: Master hanya bertindak sebagai orkestrator/distributor ke worker eksternal.
-   - **Optimasi Kecepatan Jaringan & Komputasi**:
-     * **Adaptive Zlib Compression (Level 1)**: Mengurangi ukuran transmisi TCP hingga 70% (~1.5 MB untuk 1 juta data) hanya dalam ~20 ms.
-     * **TCP Socket Buffer 4MB & TCP_NODELAY**: Menghilangkan window stall dan delay Nagle pada jaringan Wi-Fi/Hotspot.
-     * **Zero-Copy Memoryview Framing**: Mencegah overhead alokasi memori berulang pada socket receive.
-     * **C-Level Accelerated K-Way Merge**: Penggabungan potongan terurut langsung di level C (Timsort Run Merge) dalam < 0.05 detik.
-   - Dilengkapi **Progress Bar** di seluruh proses komputasi.
-   - Menghitung metrik performa (**Waktu Eksekusi**, **Speedup $S$**, **Efisiensi $E$**) dan validasi kebenaran urutan data.
-
-2. **Worker Node (Client)**:
-   - Memindai jaringan Wi-Fi/LAN lokal secara otomatis (*UDP Broadcast Discovery*).
-   - Menampilkan daftar Master yang ditemukan; pengguna cukup memilih nomor Master (atau tekan `[Enter]`).
-   - Menerima chunk data via TCP, mengurutkannya di RAM lokal, dan mengembalikan hasil ke Master (dengan progress bar).
+Dilengkapi fitur **Realtime On-The-Fly Processing** dan **Auto-Discovery Jaringan**: Worker dapat mendeteksi Master secara otomatis tanpa perlu mengetik alamat IP secara manual!
 
 ---
 
-## 📂 2. Struktur File
+## 📌 1. Fitur Utama & Cara Kerja Sistem
 
-```
+### 1. Pembangkitan & Pengurutan Realtime On-The-Fly
+- **Tanpa Bottleneck Jaringan**: Master tidak perlu mengirimkan jutaan baris data mentah (*raw data*) berukuran puluhan megabyte ke slave node.
+- **Pembangkitan Terdistribusi**: Porsi data acak dibangkitkan langsung di RAM masing-masing komputer (Master + Seluruh Worker Slave) secara simultan.
+- **Pengurutan Terakselerasi**: Setiap node langsung menyortir data lokalnya dan hanya mengalirkan (*streaming*) data terurut kembali ke Master untuk digabungkan secara linear (*Linear K-Way Merge*).
+
+### 2. Alur Pengujian Interaktif & Terstruktur
+Baik pada mode Serial maupun Distributed:
+1. **Input Ukuran Data ($N$)**: Pengguna memasukkan jumlah bilangan acak (misal `1,000,000` atau `10,000,000`).
+2. **Pembangkitan Unsorted**: Data acak dibangkitkan dan disimpan ke `unsorted.txt` disertai progress bar dan pencatatan waktu pembangkitan (`waktu_unsort`).
+3. **Prompt Konfirmasi**: Ditampilkan konfirmasi apakah ingin melanjutkan ke proses pengurutan (*Sorting*): `[Y/n]`.
+4. **Proses Pengurutan & Simpan**: Data diurutkan, divalidasi kebenarannya (*perfect non-decreasing order*), lalu disimpan ke `sorted.txt`.
+5. **Ringkasan Waktu di Akhir Proses**: Waktu eksekusi ditampilkan secara rapi di akhir proses:
+   - Waktu Unsort (Pembangkitan)
+   - Waktu Pengurutan (Sorting)
+   - Waktu Simpan berkas `sorted.txt`
+   - TOTAL WAKTU KESELURUHAN (dari sorting sampai berkas selesai ditulis)
+
+### 3. Pemisahan Mode Serial dan Distributed
+- **Mode Serial (`[1] Jalankan Serial Sorting`)**:
+  - **100% Murni Lokal di Komputer Master** (slave node tidak dilibatkan).
+  - Pembangkitan data dan pengurutan berjalan murni pada CPU lokal Master sebagai tolok ukur (*baseline*).
+- **Mode Distributed (`[2] Jalankan Distributed Sorting (Realtime On-The-Fly)`)**:
+  - **Paralel Terdistribusi Penuh**: Pembangkitan data acak maupun proses pengurutan dibagi ke Master dan seluruh Worker Slave yang terhubung secara On-The-Fly.
+  - Menghasilkan tabel metrik evaluasi kecepatan (**Speedup $S$** dan **Efisiensi $E$**).
+
+### 4. Manajemen Berkas Cepat
+- Menu **`Hapus File .txt`**: Menghapus `unsorted.txt` dan `sorted.txt` secara instan, tersedia di menu utama `main.py` maupun panel Master `master.py`.
+
+---
+
+## 📂 2. Struktur Berkas
+
+```text
 Merge-Paralel/
-├── main.py           # Pusat kendali CLI (Pilih Master / Worker)
-├── master.py         # Program Master Node (Server + UDP Beacon)
-├── worker.py         # Program Worker Node (Client + Auto-Discovery)
-├── network_utils.py  # Modul framing TCP socket & UDP Discovery
-├── cli_ui.py         # Utilitas warna ANSI, format terminal, & progress bar
-├── unsorted.txt      # Berkas data angka mentah sebelum diurutkan
-├── sorted.txt        # Berkas data angka hasil akhir yang sudah terurut
+├── main.py           # Pusat kendali CLI (Pilih Master / Worker / Hapus File)
+├── master.py         # Program Master Node (Server TCP + UDP Beacon Discovery)
+├── worker.py         # Program Worker Node (Client + Infinity Scan Auto-Discovery)
+├── network_utils.py  # Modul framing TCP socket streaming & UDP Discovery
+├── cli_ui.py         # Antarmuka ANSI aman terminal, box framing, & progress bar
+├── unsorted.txt      # Berkas data angka mentah sebelum diurutkan (otomatis dibuat)
+├── sorted.txt        # Berkas data angka hasil akhir terurut (otomatis dibuat)
 └── README.md         # Dokumentasi proyek
 ```
 
 ---
 
-## 🚀 3. Cara Menjalankan Program (2 Laptop di Satu Wi-Fi)
+## 🚀 3. Panduan Menjalankan Program (Multi-Device di Satu Wi-Fi / Hotspot)
 
-> **Catatan**: Pastikan kedua laptop terhubung ke jaringan Wi-Fi / Hotspot yang sama.
+> **Catatan**: Pastikan seluruh komputer/perangkat terhubung ke jaringan Wi-Fi atau Hotspot yang sama.
 
-### Langkah 1: Di Laptop 1 (Master)
+### Langkah 1: Jalankan Master Node (Komputer 1)
 1. Buka terminal dan jalankan:
    ```bash
    python main.py
    ```
-2. Pilih opsi **`[1] MASTER NODE`**.
-3. Master Server dan layanan auto-discovery beacon langsung aktif.
+2. Pilih opsi **`[1] MASTER NODE (Server)`**.
+3. Master Server dan layanan auto-discovery beacon (UDP 5002) langsung aktif.
+
+Tampilan Panel Master:
+```text
+ +------------------------------------------------------------------------+
+ |                     PANEL KONTROL MASTER (SERVER)                      |
+ +------------------------------------------------------------------------+
+ | Alamat IP Master  : 192.168.1.10:5000                                  |
+ | Auto-Discovery    : AKTIF (UDP 5002 - Beacon & Subnet Sweep)           |
+ | Worker Terhubung  : 1 node (Worker-1 (DESKTOP-L5EMIAD))                |
+ | File unsorted.txt : Belum ada                                          |
+ | File sorted.txt   : Belum ada                                          |
+ | Pratinjau Data    : [Belum ada data]                                   |
+ +------------------------------------------------------------------------+
+ |  [1] Jalankan Serial Sorting (Simpan ke sorted.txt)                    |
+ |  [2] Jalankan Distributed Sorting (Realtime On-The-Fly)                |
+ |  [3] Hapus File .txt (unsorted.txt & sorted.txt)                       |
+ |  [0] Keluar / Matikan Master                                           |
+ +------------------------------------------------------------------------+
+```
 
 ---
 
-### Langkah 2: Di Laptop 2 (Worker)
-1. Buka terminal di Laptop 2 dan jalankan:
+### Langkah 2: Jalankan Worker Node (Komputer 2 / Slave Lainnya)
+1. Buka terminal di Komputer 2 (atau tab terminal baru) dan jalankan:
    ```bash
    python main.py
    ```
-2. Pilih opsi **`[2] WORKER NODE`**.
-3. Worker akan otomatis menjalankan **Continuous Infinity Scan** di jaringan dan menampilkan daftar Master secara *real-time*:
+2. Pilih opsi **`[2] WORKER NODE (Client)`**.
+3. Worker akan otomatis menjalankan **Infinity Auto-Scan** dan mendeteksi Master di jaringan:
    ```text
-   +-------------------------------------------------------------------+
-   |                 INFINITY AUTO-SCAN MASTER SERVER                  |
-   |      Pencarian Master di Jaringan Wi-Fi/LAN Secara Real-Time      |
-   +-------------------------------------------------------------------+
+   +------------------------------------------------------------------------+
+   |                    INFINITY AUTO-SCAN MASTER SERVER                    |
+   |        Pencarian Master di Jaringan Wi-Fi/LAN Secara Real-Time         |
+   +------------------------------------------------------------------------+
     • Status Pemindai : AKTIF (Continuous Infinity Scan)
     • IP Worker Lokal : 192.168.1.15
     • Port Discovery  : UDP 5002
 
    Daftar Master Aktif Terdeteksi (1 server ditemukan):
-    +-------------------------------------------------------------------+
-    |  [1] LAPTOP-MASTER       192.168.1.4:5000      [ONLINE]           |
-    +-------------------------------------------------------------------+
+   +------------------------------------------------------------------------+
+   |  [1] LAPTOP-MASTER        192.168.1.10:5000      [ONLINE]              |
+   +------------------------------------------------------------------------+
      [M] Masukkan IP Master secara manual
      [0] Batal / Kembali ke Menu Utama
 
-   -------------------------------------------------------------------
    >>> Tekan [Enter] langsung untuk menghubungkan ke Master [1] <<<
-
-     Pilih Master [default: 1]: 
    ```
-4. Tekan **`[Enter]`** (atau ketik `1`).
-5. Worker langsung terhubung ke Master **tanpa perlu mengetik alamat IP secara manual**!
-6. Di layar Laptop 1 (Master), worker akan terdeteksi seketika dengan notifikasi real-time hijau cerah.
+4. Tekan **`[Enter]`** (atau ketik nomor Master). Worker langsung terhubung ke Master!
+5. Pada layar Master, notifikasi worker baru akan muncul secara *real-time*.
 
 ---
 
-### Langkah 3: Melakukan Pengujian di Laptop 1 (Master)
-Di panel kontrol Master Laptop 1:
-- Pilih **`[1]`** untuk membangkitkan data acak (tersimpan ke `unsorted.txt`).
-- Pilih **`[2]`** untuk menguji Serial Sorting (tersimpan ke `sorted.txt`).
-- Pilih **`[3]`** untuk menguji Distributed Sorting bersama Worker (tersimpan ke `sorted.txt`).
-- Pilih **`[4]`** untuk mengganti **Mode Partisi**: `Hybrid (Master + Worker)` *(default, akselerasi maksimal)* atau `Dedicated (Worker Murni)`.
-- Tabel metrik evaluasi kecepatan (**Speedup** dan **Efisiensi**) akan langsung ditampilkan.
+### Langkah 3: Eksekusi Sorting di Komputer Master
+Pilih pengujian pada menu Master:
+- **`[1] Jalankan Serial Sorting`**: Menguji pemrosesan murni 1 komputer lokal Master.
+- **`[2] Jalankan Distributed Sorting (Realtime On-The-Fly)`**: Menguji pemrosesan terdistribusi bersama seluruh worker slave.
+
+Contoh keluaran tabel dan ringkasan waktu akhir:
+```text
+Rincian Eksekusi Realtime On-The-Fly:
+ +--------+------------------------------+------------------+-------------+-------------+
+ | Chunk  | Node Komputer                | Jumlah Data      | Sort Time   | Roundtrip   |
+ +--------+------------------------------+------------------+-------------+-------------+
+ | #1     | Master Node (Lokal)          | 5,000,000 data   | 3.0158s     | 3.0158s     |
+ | #2     | Worker-1 (DESKTOP-L5EMIAD)   | 5,000,000 data   | 3.0637s     | 3.9341s     |
+ +--------+------------------------------+------------------+-------------+-------------+
+  K-Way Merge Master       [##############################] 100.0% Selesai (100%)
+[OK] Penggabungan Realtime Selesai!
+ • Hasil Terurut       : [1, 2, 2, 3, ... (10,000,000 angka) ..., 9999995, 10000000]
+  Validasi Urutan          [##############################] 100.0% Selesai (100%)
+[OK] Validasi Urutan     : BERHASIL (Data Terurut Sempurna)
+  Simpan sorted.txt        [##############################] 100.0% Selesai (100%)
+[OK] Hasil terurut berhasil disimpan ke 'sorted.txt'!
+
+RINGKASAN WAKTU DISTRIBUTED SORTING (ON-THE-FLY):
+ +------------------------------------------------------------------------+
+ | Waktu Unsort (Pembangkitan) : 1.954210 detik                           |
+ | Waktu Komputasi Paralel     : 3.934120 detik                           |
+ | Waktu K-Way Merge           : 0.447074 detik                           |
+ | Waktu Simpan sorted.txt     : 1.120531 detik                           |
+ | TOTAL WAKTU KESELURUHAN     : 5.501725 detik (dari sorting s/d simpan) |
+ +------------------------------------------------------------------------+
+```
 
 ---
 
-## 📱 4. Panduan Khusus Konektivitas HP (Android / Termux) & Laptop
+## 📱 4. Panduan Hotspot HP & Konfigurasi Jaringan
 
-Jika menggunakan **HP (Hotspot Tethering)** atau **HP sebagai Worker/Master (Termux)**:
+1. **Jaringan Hotspot Seluler**:
+   - Jika laptop dihubungkan ke Hotspot HP, sistem telah dilengkapi **Subnet Sweep** untuk menembus isolasi klien (*AP Isolation*).
+   - Di sisi Worker, Anda juga bisa langsung mengetikkan IP Master yang tertera di layar Master jika discovery otomatis dibatasi oleh router/hotspot.
 
-1. **Jaringan Hotspot HP**:
-   - Jika HP bertindak sebagai Hotspot Tethering, hubungkan Laptop ke Hotspot HP tersebut.
-   - Sistem sudah dilengkapi **Subnet Unicast Sweep** sehingga mampu menembus batasan isolasi broadcast (*AP Isolation*) pada Hotspot Android secara otomatis.
-   - Di sisi Worker, jika Master sudah terdeteksi di list, cukup tekan **`[Enter]`**.
-   - Jika Master belum muncul otomatis (karena restriksi jaringan tertentu), **Anda bisa langsung mengetik alamat IP Master yang tertera di layar Master** (contoh: `192.168.43.1` atau `192.168.43.15`) lalu tekan **`[Enter]`**.
-
-2. **Dukungan Terminal HP (Termux Android)**:
-   - Program sudah 100% mendukung Termux Android (menggunakan pembacaan input non-blocking Unix `select`).
-
-3. **Catatan Windows Defender Firewall (Jika Laptop sebagai Master)**:
-   - Saat terhubung ke Hotspot HP, Windows sering menganggap jaringan sebagai *Public Network* dan memblokir port masuk.
-   - Jika HP gagal terhubung ke Laptop:
-     - Izinkan aplikasi Python di Windows Defender Firewall, atau
-     - Buka PowerShell (Run as Administrator) dan jalankan:
-       ```powershell
-       New-NetFirewallRule -DisplayName "MergeSort TCP" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow
-       New-NetFirewallRule -DisplayName "MergeSort UDP" -Direction Inbound -LocalPort 5002 -Protocol UDP -Action Allow
-       ```
-
+2. **Pengaturan Windows Defender Firewall**:
+   - Jika Master berjalan di Windows dan Worker di laptop lain tidak dapat menemukan Master, pastikan port TCP `5000` dan UDP `5002` diizinkan:
+   ```powershell
+   New-NetFirewallRule -DisplayName "MergeSort TCP" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow
+   New-NetFirewallRule -DisplayName "MergeSort UDP" -Direction Inbound -LocalPort 5002 -Protocol UDP -Action Allow
+   ```

@@ -217,9 +217,10 @@ def generate_random_data(n: int, server: Optional[Any] = None) -> Tuple[List[int
         time_generate = t_gen_end - t_gen_start
 
     else:
-        # Pembangkitan Lokal jika belum ada worker
+        # Pembangkitan Lokal (Mode Serial / tanpa worker)
         print_header("PROSES PEMBANGKITAN DATA (UNSORTED)", f"Membangkitkan {n:,} Angka Acak Positif")
         print(f" {Colors.CYAN}•{Colors.RESET} Target Jumlah Data : {Colors.BOLD}{n:,} elemen{Colors.RESET}")
+        print(f" {Colors.CYAN}•{Colors.RESET} Mode Pembangkitan  : {Colors.BOLD}Lokal Master Node{Colors.RESET}")
         print(f" {Colors.CYAN}•{Colors.RESET} Target Berkas      : {Colors.BOLD}{FILE_UNSORTED}{Colors.RESET}")
 
         t_gen_start = time.perf_counter()
@@ -1043,7 +1044,8 @@ def run_master_cli(port: int = DEFAULT_PORT):
             except ValueError:
                 n_items = DEFAULT_DATA_SIZE
 
-            data, waktu_unsort = generate_random_data(n_items, server=server)
+            # Mode Serial murni lokal di Master (tanpa melibatkan slave/worker)
+            data, waktu_unsort = generate_random_data(n_items)
             current_data = data
 
             try:
