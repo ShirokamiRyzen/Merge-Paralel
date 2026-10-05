@@ -14,7 +14,7 @@ import time
 import socket
 import argparse
 from typing import Optional, Tuple
-from network_utils import send_packet, recv_packet, discover_masters, WorkerScanner, DEFAULT_MASTER_PORT, get_local_ip
+from network_utils import send_packet, recv_packet, discover_masters, WorkerScanner, DEFAULT_MASTER_PORT, get_local_ip, tune_socket
 from cli_ui import (
     Colors, banner, clear_screen, print_header, print_success, print_info, 
     print_warning, print_error, print_task, print_progress_bar
@@ -209,7 +209,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
     # Inisialisasi socket TCP
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    tune_socket(sock)
 
     try:
         print_task(f"Menghubungkan ke Master pada {Colors.BOLD}{host}:{port}{Colors.RESET} ...")

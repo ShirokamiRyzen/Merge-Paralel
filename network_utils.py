@@ -10,6 +10,7 @@ Modul utilitas komunikasi socket TCP/IP & UDP Auto-Discovery untuk Komputasi Ter
 import socket
 import struct
 import pickle
+import zlib
 import json
 import time
 import threading
@@ -19,45 +20,88 @@ from typing import Any, Optional, List, Dict
 HEADER_STRUCT = ">Q"
 HEADER_SIZE = struct.calcsize(HEADER_STRUCT)
 
+# Flag bit-63 untuk menandai payload yang dikompresi zlib adaptif
+FLAG_COMPRESSED = 1 << 63
+
 # Port default
 DEFAULT_MASTER_PORT = 5000
 DEFAULT_DISCOVERY_PORT = 5002
 
 
-def recv_exact(sock: socket.socket, num_bytes: int) -> Optional[bytes]:
-    """Menerima tepat num_bytes dari socket TCP stream."""
-    buffer = bytearray()
-    while len(buffer) < num_bytes:
-        chunk = sock.recv(min(num_bytes - len(buffer), 65536))
-        if not chunk:
+def tune_socket(sock: socket.socket):
+    """
+    Mengoptimalkan performa socket TCP:
+    1. TCP_NODELAY (menonaktifkan algoritma Nagle) untuk respon instan tanpa delay buffering.
+    2. Buffer Window SO_RCVBUF & SO_SNDBUF 4MB untuk mencegah bottleneck/stall pada transfer data besar via Wi-Fi/LAN.
+    """
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+    except Exception:
+        pass
+
+
+def recv_exact(sock: socket.socket, num_bytes: int) -> Optional[bytearray]:
+    """Menerima tepat num_bytes dari socket TCP stream dengan buffer pre-alokasi zero-copy."""
+    buffer = bytearray(num_bytes)
+    view = memoryview(buffer)
+    received = 0
+    chunk_size = 262144  # 256 KB chunk
+    while received < num_bytes:
+        try:
+            n = sock.recv_into(view[received:], min(num_bytes - received, chunk_size))
+            if n == 0:
+                return None
+            received += n
+        except (socket.error, ConnectionResetError, BrokenPipeError):
             return None
-        buffer.extend(chunk)
-    return bytes(buffer)
+    return buffer
 
 
 def send_packet(sock: socket.socket, payload_obj: Any) -> bool:
-    """Mengirim objek Python dengan 8-byte length prefix framing."""
+    """
+    Mengirim objek Python dengan adaptive zlib compression & 8-byte framing.
+    Payload besar (> 2 KB) dikompresi otomatis dengan level 1 (~20ms CPU, hemat bandwidth hingga 70%).
+    """
     try:
-        serialized_data = pickle.dumps(payload_obj, protocol=pickle.HIGHEST_PROTOCOL)
-        header = struct.pack(HEADER_STRUCT, len(serialized_data))
-        sock.sendall(header + serialized_data)
+        raw_data = pickle.dumps(payload_obj, protocol=pickle.HIGHEST_PROTOCOL)
+        # Kompresi adaptif untuk payload berukuran besar (seperti array 1,000,000 angka)
+        if len(raw_data) > 2048:
+            compressed = zlib.compress(raw_data, level=1)
+            if len(compressed) < len(raw_data):
+                header = struct.pack(HEADER_STRUCT, len(compressed) | FLAG_COMPRESSED)
+                sock.sendall(header + compressed)
+                return True
+        header = struct.pack(HEADER_STRUCT, len(raw_data))
+        sock.sendall(header + raw_data)
         return True
-    except (socket.error, BrokenPipeError, ConnectionResetError) as err:
+    except (socket.error, BrokenPipeError, ConnectionResetError):
         return False
 
 
 def recv_packet(sock: socket.socket) -> Optional[Any]:
-    """Membaca satu paket utuh [Header 8-byte] + [Payload] dari socket TCP."""
+    """Membaca satu paket utuh [Header 8-byte] + [Payload] dari socket TCP secara dekompresi transparan."""
     try:
         header_data = recv_exact(sock, HEADER_SIZE)
         if not header_data:
             return None
-        (payload_length,) = struct.unpack(HEADER_STRUCT, header_data)
+        (raw_length,) = struct.unpack(HEADER_STRUCT, header_data)
+        is_compressed = bool(raw_length & FLAG_COMPRESSED)
+        payload_length = raw_length & ~FLAG_COMPRESSED
+
         payload_data = recv_exact(sock, payload_length)
-        if not payload_data:
+        if payload_data is None:
             return None
+
+        if is_compressed:
+            payload_data = zlib.decompress(payload_data)
+
         return pickle.loads(payload_data)
-    except (socket.error, pickle.PickleError, ConnectionResetError):
+    except (socket.error, pickle.PickleError, ConnectionResetError, zlib.error):
         return None
 
 
