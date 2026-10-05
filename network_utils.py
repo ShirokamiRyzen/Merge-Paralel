@@ -62,29 +62,65 @@ def recv_exact(sock: socket.socket, num_bytes: int) -> Optional[bytearray]:
     return buffer
 
 
-def send_packet(sock: socket.socket, payload_obj: Any) -> bool:
+def is_socket_alive(sock: socket.socket) -> bool:
+    """
+    Pemeriksaan status koneksi TCP non-blocking tanpa latency PING roundtrip.
+    Mendeteksi apakah socket terputus seketika dalam 0 milidetik.
+    """
+    try:
+        import select
+        r, _, _ = select.select([sock], [], [], 0)
+        if r:
+            peek = sock.recv(1, socket.MSG_PEEK)
+            if len(peek) == 0:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def send_packet(sock: socket.socket, payload_obj: Any, progress_callback=None) -> bool:
     """
     Mengirim objek Python dengan adaptive zlib compression & 8-byte framing.
-    Payload besar (> 2 KB) dikompresi otomatis dengan level 1 (~20ms CPU, hemat bandwidth hingga 70%).
+    Mendukung transmisi streaming kontinu dan pelaporan progres real-time.
     """
     try:
         raw_data = pickle.dumps(payload_obj, protocol=pickle.HIGHEST_PROTOCOL)
-        # Kompresi adaptif untuk payload berukuran besar (seperti array 1,000,000 angka)
         if len(raw_data) > 2048:
             compressed = zlib.compress(raw_data, level=1)
             if len(compressed) < len(raw_data):
-                header = struct.pack(HEADER_STRUCT, len(compressed) | FLAG_COMPRESSED)
-                sock.sendall(header + compressed)
-                return True
-        header = struct.pack(HEADER_STRUCT, len(raw_data))
-        sock.sendall(header + raw_data)
+                body = compressed
+                header = struct.pack(HEADER_STRUCT, len(body) | FLAG_COMPRESSED)
+            else:
+                body = raw_data
+                header = struct.pack(HEADER_STRUCT, len(body))
+        else:
+            body = raw_data
+            header = struct.pack(HEADER_STRUCT, len(body))
+
+        total_bytes = len(body)
+        sock.sendall(header)
+
+        # Transmisi streaming kontinu dengan chunk 256 KB
+        view = memoryview(body)
+        sent = 0
+        chunk_size = 262144
+        while sent < total_bytes:
+            chunk_len = min(chunk_size, total_bytes - sent)
+            n = sock.send(view[sent:sent + chunk_len])
+            if n == 0:
+                return False
+            sent += n
+            if progress_callback:
+                progress_callback(sent, total_bytes)
+
         return True
     except (socket.error, BrokenPipeError, ConnectionResetError):
         return False
 
 
-def recv_packet(sock: socket.socket) -> Optional[Any]:
-    """Membaca satu paket utuh [Header 8-byte] + [Payload] dari socket TCP secara dekompresi transparan."""
+def recv_packet(sock: socket.socket, progress_callback=None) -> Optional[Any]:
+    """Membaca satu paket utuh dari socket TCP dengan streaming kontinu dan progress callback."""
     try:
         header_data = recv_exact(sock, HEADER_SIZE)
         if not header_data:
@@ -93,14 +129,23 @@ def recv_packet(sock: socket.socket) -> Optional[Any]:
         is_compressed = bool(raw_length & FLAG_COMPRESSED)
         payload_length = raw_length & ~FLAG_COMPRESSED
 
-        payload_data = recv_exact(sock, payload_length)
-        if payload_data is None:
-            return None
+        buffer = bytearray(payload_length)
+        view = memoryview(buffer)
+        received = 0
+        chunk_size = 262144
+        while received < payload_length:
+            chunk_len = min(chunk_size, payload_length - received)
+            n = sock.recv_into(view[received:], chunk_len)
+            if n == 0:
+                return None
+            received += n
+            if progress_callback:
+                progress_callback(received, payload_length)
 
         if is_compressed:
-            payload_data = zlib.decompress(payload_data)
+            buffer = zlib.decompress(buffer)
 
-        return pickle.loads(payload_data)
+        return pickle.loads(buffer)
     except (socket.error, pickle.PickleError, ConnectionResetError, zlib.error):
         return None
 
@@ -200,6 +245,7 @@ class MasterBeacon:
         self.tcp_port = tcp_port
         self.discovery_port = discovery_port
         self.is_running = False
+        self.is_paused = False
         self.thread: Optional[threading.Thread] = None
         self.udp_sock: Optional[socket.socket] = None
 
@@ -208,6 +254,14 @@ class MasterBeacon:
         self.is_running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
+
+    def pause(self):
+        """Menjeda beacon saat transfer data TCP intensif agar Wi-Fi 100% dialokasikan ke TCP."""
+        self.is_paused = True
+
+    def resume(self):
+        """Melanjutkan siaran beacon setelah transfer TCP selesai."""
+        self.is_paused = False
 
     def _get_matching_ip(self, client_ip: str) -> str:
         """Memilih IP Master yang satu subnet dengan Worker."""
@@ -237,8 +291,8 @@ class MasterBeacon:
         while self.is_running:
             now = time.time()
 
-            # 1. Kirim periodic beacon announce setiap 1.0 detik
-            if now - last_bcast >= 1.0:
+            # 1. Kirim periodic beacon announce setiap 1.0 detik (jika tidak sedang di-pause)
+            if not self.is_paused and (now - last_bcast >= 1.0):
                 all_ips = get_all_local_ips()
                 for cur_ip in all_ips:
                     payload = json.dumps({

@@ -20,7 +20,10 @@ import threading
 import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 
-from network_utils import send_packet, recv_packet, MasterBeacon, DEFAULT_MASTER_PORT, get_local_ip, get_all_local_ips, tune_socket
+from network_utils import (
+    send_packet, recv_packet, MasterBeacon, DEFAULT_MASTER_PORT, 
+    get_local_ip, get_all_local_ips, tune_socket, is_socket_alive
+)
 from cli_ui import (
     Colors, banner, clear_screen, print_header, print_success, print_info, 
     print_warning, print_error, print_task, print_table_row, print_table_footer,
@@ -186,26 +189,19 @@ class MasterServer:
 
     def get_live_workers(self) -> List[Dict[str, Any]]:
         """
-        Memeriksa koneksi seluruh worker secara aktif (health check PING).
+        Memeriksa koneksi seluruh worker secara instan (non-blocking) tanpa jeda PING.
         Menghapus worker yang sudah terputus sebelum komputasi dimulai.
         """
         with self.workers_lock:
             live = []
             for w in list(self.workers):
-                try:
-                    w["sock"].settimeout(0.15)
-                    if send_packet(w["sock"], {"cmd": "PING"}):
-                        resp = recv_packet(w["sock"])
-                        if resp and resp.get("status") == "PONG":
-                            w["sock"].settimeout(None)
-                            live.append(w)
-                            continue
-                except Exception:
-                    pass
-                try:
-                    w["sock"].close()
-                except Exception:
-                    pass
+                if is_socket_alive(w["sock"]):
+                    live.append(w)
+                else:
+                    try:
+                        w["sock"].close()
+                    except Exception:
+                        pass
             self.workers = live
             return list(self.workers)
 
@@ -298,7 +294,7 @@ def run_serial_sorting(data: List[int]) -> Tuple[float, bool, List[int]]:
 
 
 def _worker_sort_task(worker_info: Dict[str, Any], chunk: List[int], chunk_id: int) -> Dict[str, Any]:
-    """Mengirim chunk ke satu worker via TCP dan menerima hasil terurut."""
+    """Mengirim chunk ke satu worker via TCP secara streaming kontinu dan menerima hasil terurut."""
     sock = worker_info["sock"]
     name = worker_info["name"]
     
@@ -308,10 +304,20 @@ def _worker_sort_task(worker_info: Dict[str, Any], chunk: List[int], chunk_id: i
         "chunk_id": chunk_id,
         "data": chunk,
     }
-    if not send_packet(sock, payload):
+    
+    # Kirim paket via TCP secara streaming kontinu
+    if not send_packet(
+        sock, 
+        payload, 
+        progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix=f"Kirim TCP #{chunk_id}", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+    ):
         raise ConnectionError(f"Gagal mengirim data ke worker {name}")
 
-    response = recv_packet(sock)
+    # Terima paket respon via TCP secara streaming kontinu
+    response = recv_packet(
+        sock, 
+        progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix=f"Terima TCP #{chunk_id}", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+    )
     t_dispatch_end = time.perf_counter()
     
     if not response or response.get("status") != "OK":
@@ -379,110 +385,118 @@ def run_distributed_sorting(server: MasterServer, data: List[int], is_hybrid: bo
 
     t_dist_total_start = time.perf_counter()
 
-    # 3. Distribusi & Komputasi Paralel ke Seluruh Worker Secara BERSAMAAN
-    results = []
-    failed_workers = []
-    completed_count = 0
+    # Jeda siaran beacon UDP sementara agar bandwidth Wi-Fi 100% dialokasikan ke koneksi TCP kontinu
+    if hasattr(server, "beacon") and server.beacon:
+        server.beacon.pause()
 
-    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Memulai Eksekusi Paralel ke {total_partitions} Node Bersamaan:{Colors.RESET}")
+    try:
+        # 3. Distribusi & Komputasi Paralel ke Seluruh Worker Secara BERSAMAAN
+        results = []
+        failed_workers = []
+        completed_count = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=total_partitions) as executor:
-        future_map = {}
-        chunk_idx = 0
+        print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Memulai Eksekusi Paralel ke {total_partitions} Node Bersamaan:{Colors.RESET}")
 
-        if is_hybrid:
-            # Chunk 1 diproses secara lokal oleh CPU Master tanpa latency TCP
-            print(f"  {Colors.BRIGHT_GREEN}➔{Colors.RESET} Menugaskan {len(chunks[0]):,} data (Chunk #1) ke {Colors.BOLD}Master Node (Lokal CPU){Colors.RESET}...")
-            fut_master = executor.submit(_master_local_sort_task, chunks[0], 1)
-            future_map[fut_master] = {"name": "Master Node (Lokal CPU)", "is_local": True}
-            chunk_idx = 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_partitions) as executor:
+            future_map = {}
+            chunk_idx = 0
 
-        for w_idx, w in enumerate(active_workers):
-            c_num = chunk_idx + 1
-            print(f"  {Colors.BRIGHT_CYAN}➔{Colors.RESET} Mengirim {len(chunks[chunk_idx]):,} data (Chunk #{c_num}) ke {Colors.BOLD}{w['name']}{Colors.RESET}...")
-            fut_worker = executor.submit(_worker_sort_task, w, chunks[chunk_idx], c_num)
-            future_map[fut_worker] = {"name": w["name"], "is_local": False, "worker_info": w}
-            chunk_idx += 1
+            if is_hybrid:
+                # Chunk 1 diproses secara lokal oleh CPU Master tanpa latency TCP
+                print(f"  {Colors.BRIGHT_GREEN}➔{Colors.RESET} Menugaskan {len(chunks[0]):,} data (Chunk #1) ke {Colors.BOLD}Master Node (Lokal CPU){Colors.RESET}...")
+                fut_master = executor.submit(_master_local_sort_task, chunks[0], 1)
+                future_map[fut_master] = {"name": "Master Node (Lokal CPU)", "is_local": True}
+                chunk_idx = 1
 
-        for future in concurrent.futures.as_completed(future_map):
-            meta = future_map[future]
-            try:
-                res = future.result()
-                results.append(res)
-                completed_count += 1
-                print_progress_bar(completed_count, total_partitions, prefix="Komputasi Paralel", suffix=f"{res['worker_name']} Selesai ({completed_count}/{total_partitions})")
-            except Exception as err:
-                print_error(f"Gagal pada {meta['name']}: {err}")
-                if not meta.get("is_local"):
-                    failed_workers.append(meta["worker_info"])
+            for w_idx, w in enumerate(active_workers):
+                c_num = chunk_idx + 1
+                print(f"  {Colors.BRIGHT_CYAN}➔{Colors.RESET} Mengirim {len(chunks[chunk_idx]):,} data (Chunk #{c_num}) ke {Colors.BOLD}{w['name']}{Colors.RESET}...")
+                fut_worker = executor.submit(_worker_sort_task, w, chunks[chunk_idx], c_num)
+                future_map[fut_worker] = {"name": w["name"], "is_local": False, "worker_info": w}
+                chunk_idx += 1
 
-    for dead_w in failed_workers:
-        server.remove_dead_worker(dead_w)
+            for future in concurrent.futures.as_completed(future_map):
+                meta = future_map[future]
+                try:
+                    res = future.result()
+                    results.append(res)
+                    completed_count += 1
+                    print_progress_bar(completed_count, total_partitions, prefix="Komputasi Paralel", suffix=f"{res['worker_name']} Selesai ({completed_count}/{total_partitions})")
+                except Exception as err:
+                    print_error(f"Gagal pada {meta['name']}: {err}")
+                    if not meta.get("is_local"):
+                        failed_workers.append(meta["worker_info"])
 
-    if len(results) != total_partitions:
-        print_error("Pengurutan terdistribusi gagal karena ada worker yang terputus.")
-        return None
+        for dead_w in failed_workers:
+            server.remove_dead_worker(dead_w)
 
-    # Urutkan results berdasarkan chunk_id agar terstruktur
-    results.sort(key=lambda x: x["chunk_id"])
+        if len(results) != total_partitions:
+            print_error("Pengurutan terdistribusi gagal karena ada worker yang terputus.")
+            return None
 
-    t_network_done = time.perf_counter()
-    network_and_sort_time = t_network_done - t_dist_total_start
+        # Urutkan results berdasarkan chunk_id agar terstruktur
+        results.sort(key=lambda x: x["chunk_id"])
 
-    # Tabel Rincian Eksekusi Paralel Tiap Worker
-    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Rincian Eksekusi Paralel Seluruh Node:{Colors.RESET}")
-    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
-    print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {'Chunk':<8} | {'Nama Node':<28} | {'Jumlah Data':<15} | {'Sort Time':<10} | {'Roundtrip':<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
-    for r in results:
-        c_tag = f"#{r['chunk_id']}"
-        w_name = r["worker_name"][:28]
-        c_len = f"{len(r['sorted_chunk']):,} data"
-        s_time = f"{r['worker_sort_time']:.4f}s"
-        r_time = f"{r['roundtrip_time']:.4f}s"
-        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {c_tag:<8} | {w_name:<28} | {c_len:<15} | {s_time:<10} | {r_time:<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
-    print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+        t_network_done = time.perf_counter()
+        network_and_sort_time = t_network_done - t_dist_total_start
 
-    # 4. K-Way Merge di Master Terakselerasi
-    t_merge_start = time.perf_counter()
-    sorted_chunks = [r["sorted_chunk"] for r in results]
-    print_progress_bar(1, 2, prefix="K-Way Merge Master", suffix="Menggabungkan potongan terurut...")
+        # Tabel Rincian Eksekusi Paralel Tiap Worker
+        print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}Rincian Eksekusi Paralel Seluruh Node:{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {'Chunk':<8} | {'Nama Node':<28} | {'Jumlah Data':<15} | {'Sort Time':<10} | {'Roundtrip':<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
+        for r in results:
+            c_tag = f"#{r['chunk_id']}"
+            w_name = r["worker_name"][:28]
+            c_len = f"{len(r['sorted_chunk']):,} data"
+            s_time = f"{r['worker_sort_time']:.4f}s"
+            r_time = f"{r['roundtrip_time']:.4f}s"
+            print(f" {Colors.BRIGHT_BLUE}|{Colors.RESET} {c_tag:<8} | {w_name:<28} | {c_len:<15} | {s_time:<10} | {r_time:<10} {Colors.BRIGHT_BLUE}|{Colors.RESET}")
+        print(f" {Colors.BRIGHT_BLUE}+-------------------------------------------------------------------------------+{Colors.RESET}")
 
-    if len(sorted_chunks) == 1:
-        final_sorted_data = sorted_chunks[0]
-    else:
-        # Penggabungan K-Way terakselerasi:
-        # Menggunakan Timsort di level C yang mengenali pre-sorted runs secara natural dalam O(N log K)
-        final_sorted_data = []
-        for chunk in sorted_chunks:
-            final_sorted_data.extend(chunk)
-        final_sorted_data.sort()
+        # 4. K-Way Merge di Master Terakselerasi
+        t_merge_start = time.perf_counter()
+        sorted_chunks = [r["sorted_chunk"] for r in results]
+        print_progress_bar(1, 2, prefix="K-Way Merge Master", suffix="Menggabungkan potongan terurut...")
 
-    print_progress_bar(2, 2, prefix="K-Way Merge Master", suffix="Selesai (100%)")
-    t_merge_end = time.perf_counter()
-    merge_time = t_merge_end - t_merge_start
-    total_distributed_time = t_merge_end - t_dist_total_start
+        if len(sorted_chunks) == 1:
+            final_sorted_data = sorted_chunks[0]
+        else:
+            # Penggabungan K-Way terakselerasi:
+            # Menggunakan Timsort di level C yang mengenali pre-sorted runs secara natural dalam O(N log K)
+            final_sorted_data = []
+            for chunk in sorted_chunks:
+                final_sorted_data.extend(chunk)
+            final_sorted_data.sort()
 
-    print_success("Penggabungan K-Way Merge Selesai!")
-    print(f" {Colors.CYAN}•{Colors.RESET} Hasil Terurut       : {format_data_preview(final_sorted_data)}")
-    print(f" {Colors.CYAN}•{Colors.RESET} Waktu Paralel/TCP   : {network_and_sort_time:.6f} detik")
-    print(f" {Colors.CYAN}•{Colors.RESET} Waktu K-Way Merge   : {merge_time:.6f} detik")
-    print(f" {Colors.CYAN}•{Colors.RESET} TOTAL WAKTU DIST    : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET}")
+        print_progress_bar(2, 2, prefix="K-Way Merge Master", suffix="Selesai (100%)")
+        t_merge_end = time.perf_counter()
+        merge_time = t_merge_end - t_merge_start
+        total_distributed_time = t_merge_end - t_dist_total_start
 
-    # 5. Validasi dengan Progress Bar
-    is_valid = (len(final_sorted_data) == len(data)) and is_sorted(final_sorted_data)
-    print_progress_bar(1, 1, prefix="Validasi Urutan", suffix="Selesai (100%)")
-    if is_valid:
-        print_success("Validasi Urutan     : BERHASIL (Data Terurut Sempurna)")
-    else:
-        print_error("Validasi Urutan     : GAGAL (Data Rusak/Tidak Terurut)")
+        print_success("Penggabungan K-Way Merge Selesai!")
+        print(f" {Colors.CYAN}•{Colors.RESET} Hasil Terurut       : {format_data_preview(final_sorted_data)}")
+        print(f" {Colors.CYAN}•{Colors.RESET} Waktu Paralel/TCP   : {network_and_sort_time:.6f} detik")
+        print(f" {Colors.CYAN}•{Colors.RESET} Waktu K-Way Merge   : {merge_time:.6f} detik")
+        print(f" {Colors.CYAN}•{Colors.RESET} TOTAL WAKTU DIST    : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET}")
 
-    # 6. Simpan ke sorted.txt dengan Progress Bar
-    save_to_file(final_sorted_data, FILE_SORTED)
-    print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
-    print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
+        # 5. Validasi dengan Progress Bar
+        is_valid = (len(final_sorted_data) == len(data)) and is_sorted(final_sorted_data)
+        print_progress_bar(1, 1, prefix="Validasi Urutan", suffix="Selesai (100%)")
+        if is_valid:
+            print_success("Validasi Urutan     : BERHASIL (Data Terurut Sempurna)")
+        else:
+            print_error("Validasi Urutan     : GAGAL (Data Rusak/Tidak Terurut)")
 
-    return total_distributed_time, is_valid, final_sorted_data, total_partitions
+        # 6. Simpan ke sorted.txt dengan Progress Bar
+        save_to_file(final_sorted_data, FILE_SORTED)
+        print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+        print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
+
+        return total_distributed_time, is_valid, final_sorted_data, total_partitions
+    finally:
+        if hasattr(server, "beacon") and server.beacon:
+            server.beacon.resume()
 
 
 def print_comparison_metrics(t_serial: float, t_dist: float, compute_nodes: int, is_hybrid: bool = True, num_workers: int = 1):

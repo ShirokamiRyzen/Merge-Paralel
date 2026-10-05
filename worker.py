@@ -240,7 +240,11 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
     try:
         while True:
-            packet = recv_packet(sock)
+            # Menerima paket streaming secara kontinu
+            packet = recv_packet(
+                sock,
+                progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Menerima Stream TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+            )
             if packet is None:
                 print_warning("Koneksi terputus dari Master. Worker berhenti.")
                 break
@@ -253,7 +257,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 n_items = len(data_chunk)
 
                 print_header(f"TUGAS KOMPUTASI PARALEL: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | Node: {worker_name}")
-                print_progress_bar(1, 3, prefix="Penerimaan Paket TCP", suffix="Selesai (1/3)")
+                print_progress_bar(1, 3, prefix="Penerimaan Stream TCP", suffix=f"{n_items:,} data diterima (1/3)")
 
                 t_start = time.perf_counter()
                 data_chunk.sort()
@@ -270,7 +274,12 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     "data": data_chunk,
                 }
                 t_send_start = time.perf_counter()
-                if send_packet(sock, response):
+                # Mengirim balik hasil terurut dengan streaming kontinu
+                if send_packet(
+                    sock, 
+                    response,
+                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Balik TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                ):
                     t_send_end = time.perf_counter()
                     print_progress_bar(3, 3, prefix="Pengiriman Balik TCP", suffix=f"{t_send_end - t_send_start:.4f} dtk (3/3)")
                     print_success(f"Chunk #{chunk_id} ({n_items:,} data) berhasil diurutkan & dikembalikan ke Master!")
