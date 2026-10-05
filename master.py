@@ -100,33 +100,142 @@ def load_from_file(filename: str) -> Optional[List[int]]:
         return None
 
 
-def generate_random_data(n: int) -> Tuple[List[int], float]:
+def delete_txt_files(file_unsorted: str = FILE_UNSORTED, file_sorted: str = FILE_SORTED) -> Tuple[bool, str]:
+    """Menghapus berkas unsorted.txt dan sorted.txt jika ada."""
+    deleted = []
+    for fname in [file_unsorted, file_sorted]:
+        if os.path.exists(fname):
+            try:
+                os.remove(fname)
+                deleted.append(fname)
+            except Exception as e:
+                return False, f"Gagal menghapus '{fname}': {e}"
+    if deleted:
+        names_str = ", ".join(f"'{f}'" for f in deleted)
+        return True, f"Berkas {names_str} berhasil dihapus!"
+    return True, "Tidak ada berkas 'unsorted.txt' atau 'sorted.txt' yang ditemukan."
+
+
+def generate_random_data(n: int, server: Optional[Any] = None) -> Tuple[List[int], float]:
     """
-    Membangkitkan N angka integer acak POSITIF (tidak ada angka minus)
-    dengan PROGRESS BAR bertahap dan menyimpannya langsung ke 'unsorted.txt'.
-    Menampilkan rincian dan TOTAL WAKTU PROSES seperti pada proses akhir sorted.
+    Membangkitkan N angka integer acak POSITIF (tidak ada angka minus).
+    Jika ada worker/slave yang terhubung ke server, proses pembangkitan data
+    dilakukan secara terdistribusi (paralel) oleh Master dan seluruh Worker On-The-Fly,
+    lalu disimpan ke 'unsorted.txt'.
     """
-    print_header("PROSES PEMBANGKITAN DATA (UNSORTED)", f"Membangkitkan {n:,} Angka Acak Positif")
-    print(f" {Colors.CYAN}•{Colors.RESET} Target Jumlah Data : {Colors.BOLD}{n:,} elemen{Colors.RESET}")
-    print(f" {Colors.CYAN}•{Colors.RESET} Target Berkas      : {Colors.BOLD}{FILE_UNSORTED}{Colors.RESET}")
+    active_workers = server.get_live_workers() if server else []
+    k_workers = len(active_workers)
+    total_computers = k_workers + 1
 
     t_total_start = time.perf_counter()
 
-    # 1. Pembangkitan Angka dengan Progress Bar
-    t_gen_start = time.perf_counter()
-    data = []
-    num_batches = 10
-    batch_size = n // num_batches
+    if k_workers > 0:
+        # Pembangkitan Paralel Terdistribusi On-The-Fly bersama Slave
+        print_header(
+            "PROSES PEMBANGKITAN DATA (UNSORTED) ON-THE-FLY", 
+            f"Membangkitkan {n:,} Angka Acak | {total_computers} Komputer (1 Master + {k_workers} Worker)"
+        )
+        print(f" {Colors.CYAN}•{Colors.RESET} Target Jumlah Data : {Colors.BOLD}{n:,} elemen{Colors.RESET}")
+        print(f" {Colors.CYAN}•{Colors.RESET} Mode Pembangkitan  : {Colors.BOLD}{Colors.BRIGHT_GREEN}Paralel On-The-Fly (Bantuan Komputer Slave){Colors.RESET}")
+        print(f" {Colors.CYAN}•{Colors.RESET} Target Berkas      : {Colors.BOLD}{FILE_UNSORTED}{Colors.RESET}")
 
-    for b in range(num_batches):
-        cur_batch = n - len(data) if b == num_batches - 1 else batch_size
-        data.extend([random.randint(1, 10_000_000) for _ in range(cur_batch)])
-        print_progress_bar(b + 1, num_batches, prefix="Generate Angka", suffix=f"{len(data):,}/{n:,}")
+        # Pembagian porsi
+        counts = []
+        allocated = 0
+        for idx in range(total_computers):
+            if idx == total_computers - 1:
+                cnt = n - allocated
+            else:
+                cnt = n // total_computers
+                allocated += cnt
+            counts.append(cnt)
+            node_lbl = "Master Node" if idx == 0 else f"Worker #{idx}"
+            print(f" {Colors.CYAN}•{Colors.RESET} Alokasi {node_lbl:<16}: {Colors.BOLD}{cnt:,} data acak{Colors.RESET} (Generated On-The-Fly)")
 
-    t_gen_end = time.perf_counter()
-    time_generate = t_gen_end - t_gen_start
+        t_gen_start = time.perf_counter()
 
-    # 2. Penyimpanan ke File unsorted.txt dengan Progress Bar
+        def _master_gen_task(count: int, seed: int) -> List[int]:
+            rng = random.Random(seed)
+            return [rng.randint(1, 10_000_000) for _ in range(count)]
+
+        def _worker_gen_task(w_info: Dict[str, Any], count: int, c_id: int, seed: int) -> Tuple[int, List[int]]:
+            payload = {
+                "cmd": "GENERATE_UNSORTED",
+                "chunk_id": c_id,
+                "count": count,
+                "seed": seed,
+            }
+            if not send_packet(w_info["sock"], payload):
+                raise ConnectionError(f"Gagal mengirim instruksi generate ke worker {w_info['name']}")
+            resp = recv_packet(
+                w_info["sock"],
+                progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix=f"Terima Data #{c_id}", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+            )
+            if not resp or resp.get("status") != "OK":
+                raise ConnectionError(f"Respon tidak valid dari worker {w_info['name']}")
+            return c_id, resp.get("data", [])
+
+        results: Dict[int, List[int]] = {}
+        completed_count = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_computers) as executor:
+            future_map = {}
+            # Master local task
+            fut_master = executor.submit(_master_gen_task, counts[0], random.randint(1, 1_000_000))
+            future_map[fut_master] = (0, "Master Node")
+
+            # Worker tasks
+            for w_idx, w in enumerate(active_workers):
+                c_num = w_idx + 1
+                fut_w = executor.submit(_worker_gen_task, w, counts[c_num], c_num, random.randint(1, 1_000_000))
+                future_map[fut_w] = (c_num, w["name"])
+
+            for fut in concurrent.futures.as_completed(future_map):
+                c_id, node_name = future_map[fut]
+                try:
+                    res_val = fut.result()
+                    if c_id == 0:
+                        results[0] = res_val
+                    else:
+                        _, arr = res_val
+                        results[c_id] = arr
+                    completed_count += 1
+                    print_progress_bar(completed_count, total_computers, prefix="Pembangkitan On-The-Fly", suffix=f"{node_name} Selesai ({completed_count}/{total_computers})")
+                except Exception as err:
+                    print_warning(f"Worker {node_name} gagal generate data: {err}. Master membangkitkan porsi ini.")
+                    # Fallback jika worker gagal
+                    rng = random.Random()
+                    results[c_id] = [rng.randint(1, 10_000_000) for _ in range(counts[c_id])]
+                    completed_count += 1
+                    print_progress_bar(completed_count, total_computers, prefix="Pembangkitan On-The-Fly", suffix=f"{node_name} (Lokal) ({completed_count}/{total_computers})")
+
+        # Gabungkan data
+        data = []
+        for i in range(total_computers):
+            data.extend(results.get(i, []))
+
+        t_gen_end = time.perf_counter()
+        time_generate = t_gen_end - t_gen_start
+
+    else:
+        # Pembangkitan Lokal jika belum ada worker
+        print_header("PROSES PEMBANGKITAN DATA (UNSORTED)", f"Membangkitkan {n:,} Angka Acak Positif")
+        print(f" {Colors.CYAN}•{Colors.RESET} Target Jumlah Data : {Colors.BOLD}{n:,} elemen{Colors.RESET}")
+        print(f" {Colors.CYAN}•{Colors.RESET} Target Berkas      : {Colors.BOLD}{FILE_UNSORTED}{Colors.RESET}")
+
+        t_gen_start = time.perf_counter()
+        data = []
+        num_batches = 10
+        batch_size = n // num_batches
+
+        for b in range(num_batches):
+            cur_batch = n - len(data) if b == num_batches - 1 else batch_size
+            data.extend([random.randint(1, 10_000_000) for _ in range(cur_batch)])
+            print_progress_bar(b + 1, num_batches, prefix="Generate Angka", suffix=f"{len(data):,}/{n:,}")
+
+        t_gen_end = time.perf_counter()
+        time_generate = t_gen_end - t_gen_start
+
+    # Simpan ke unsorted.txt
     t_save_start = time.perf_counter()
     save_to_file(data, FILE_UNSORTED)
     t_save_end = time.perf_counter()
@@ -207,7 +316,7 @@ class MasterServer:
 
                 # Notifikasi real-time di console Master saat worker terdeteksi & terhubung
                 sys.stdout.write(f"\r\n{Colors.BRIGHT_GREEN}[✓] WORKER BARU TERHUBUNG: {worker_name} ({client_addr[0]}:{client_addr[1]}) [Total: {active_count} Worker]{Colors.RESET}\n")
-                sys.stdout.write(f"{Colors.BRIGHT_YELLOW}Pilih menu [1-2, 0]: {Colors.RESET}")
+                sys.stdout.write(f"{Colors.BRIGHT_YELLOW}Pilih menu [1-3, 0]: {Colors.RESET}")
                 sys.stdout.flush()
 
                 worker_counter += 1
@@ -907,6 +1016,7 @@ def run_master_cli(port: int = DEFAULT_PORT):
         print(box_border())
         print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}Jalankan Serial Sorting{Colors.RESET} (Simpan ke {FILE_SORTED})"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}Jalankan Distributed Sorting{Colors.RESET} (Realtime On-The-Fly)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
         print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar / Matikan Master"))
         print(box_border())
         print(f" {Colors.DIM}💡 Tips HP Hotspot: Di Worker, Anda bisa langsung ketik IP Master di atas lalu [Enter]{Colors.RESET}")
@@ -920,7 +1030,7 @@ def run_master_cli(port: int = DEFAULT_PORT):
             is_notif_warning = False
 
         try:
-            choice = input(f"\n{Colors.BRIGHT_YELLOW}Pilih menu [1-2, 0]: {Colors.RESET}").strip()
+            choice = input(f"\n{Colors.BRIGHT_YELLOW}Pilih menu [1-3, 0]: {Colors.RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             break
 
@@ -933,7 +1043,7 @@ def run_master_cli(port: int = DEFAULT_PORT):
             except ValueError:
                 n_items = DEFAULT_DATA_SIZE
 
-            data, waktu_unsort = generate_random_data(n_items)
+            data, waktu_unsort = generate_random_data(n_items, server=server)
             current_data = data
 
             try:
@@ -967,7 +1077,7 @@ def run_master_cli(port: int = DEFAULT_PORT):
             except ValueError:
                 n_items = DEFAULT_DATA_SIZE
 
-            data, waktu_unsort = generate_random_data(n_items)
+            data, waktu_unsort = generate_random_data(n_items, server=server)
             current_data = data
 
             try:
@@ -988,10 +1098,17 @@ def run_master_cli(port: int = DEFAULT_PORT):
                     print_comparison_metrics(last_serial_time, last_dist_time, total_computers=last_nodes_count, num_workers=len(server.get_active_workers()))
             input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke panel kontrol...{Colors.RESET}")
 
+        elif choice == "3":
+            success, msg = delete_txt_files(FILE_UNSORTED, FILE_SORTED)
+            current_data = None
+            notification = msg
+            is_notif_warning = not success
+            continue
+
         elif choice == "0":
             break
         else:
-            notification = "Pilihan tidak valid. Silakan pilih 1, 2, atau 0."
+            notification = "Pilihan tidak valid. Silakan pilih 1, 2, 3, atau 0."
             is_notif_warning = True
 
     server.shutdown()

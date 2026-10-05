@@ -326,6 +326,43 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     print_error("Gagal mengirim data kembali ke Master.")
                     break
 
+            elif cmd == "GENERATE_UNSORTED":
+                n_items = packet.get("count", 500_000)
+                chunk_id = packet.get("chunk_id", 0)
+                seed = packet.get("seed", None)
+
+                print_header(f"TUGAS PEMBANGKITAN DATA (UNSORTED): CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer acak | {worker_name}")
+                print_progress_bar(1, 2, prefix="Generate On-The-Fly", suffix=f"Membangkitkan {n_items:,} data di RAM (1/2)")
+
+                t_start = time.perf_counter()
+                import random
+                rng = random.Random(seed) if seed is not None else random.Random()
+                data_chunk = [rng.randint(1, 10_000_000) for _ in range(n_items)]
+                t_end = time.perf_counter()
+                gen_duration = t_end - t_start
+
+                print_progress_bar(2, 2, prefix="Generate On-The-Fly", suffix=f"Selesai ({gen_duration:.4f} dtk) (2/2)")
+
+                response = {
+                    "status": "OK",
+                    "chunk_id": chunk_id,
+                    "worker_name": worker_name,
+                    "gen_time": gen_duration,
+                    "data": data_chunk,
+                }
+                t_send_start = time.perf_counter()
+                if send_packet(
+                    sock, 
+                    response,
+                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Stream TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                ):
+                    t_send_end = time.perf_counter()
+                    print_success(f"Chunk #{chunk_id} ({n_items:,} data acak) berhasil dibangkitkan & dikirim ke Master!")
+                    print_info(f"Worker kembali STANDBY. Menunggu tugas berikutnya...\n")
+                else:
+                    print_error("Gagal mengirim data acak ke Master.")
+                    break
+
             elif cmd == "SORT":
                 data_chunk = packet.get("data", [])
                 chunk_id = packet.get("chunk_id", 0)
