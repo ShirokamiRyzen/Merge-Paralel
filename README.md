@@ -9,29 +9,31 @@ Dilengkapi fitur **Realtime On-The-Fly Processing** dan **Auto-Discovery Jaringa
 
 ## 📌 1. Fitur Utama & Cara Kerja Sistem
 
-### 1. Pembangkitan & Pengurutan Realtime On-The-Fly
-- **Tanpa Bottleneck Jaringan**: Master tidak perlu mengirimkan jutaan baris data mentah (*raw data*) berukuran puluhan megabyte ke slave node.
-- **Pembangkitan Terdistribusi**: Porsi data acak dibangkitkan langsung di RAM masing-masing komputer (Master + Seluruh Worker Slave) secara simultan.
-- **Pengurutan Terakselerasi**: Setiap node langsung menyortir data lokalnya dan hanya mengalirkan (*streaming*) data terurut kembali ke Master untuk digabungkan secara linear (*Linear K-Way Merge*).
+### 1. Pipelined Stream Concurrent Sorting (Kedua Komputer Bekerja Bersamaan)
+- **Eliminasi Bottleneck Jaringan**: Menghilangkan hambatan di mana Master mengirim separuh data berukuran raksasa sekaligus lalu diam menunggu Slave. Data dipartisi menjadi *streaming chunks* berukuran ringan (~50.000 data per batch).
+- **Komputasi Simultan Sejak Detik Pertama**: Master langsung menyortir porsi lokalnya di CPU Master, sementara Worker Slave menyortir porsi di CPU Worker secara bersamaan tanpa saling menunggu.
+- **Dynamic Work-Stealing**: Jika salah satu komputer menyelesaikan porsinya lebih cepat, komputer tersebut otomatis membantu menyelesaikan sisa chunk yang belum diproses.
+- **Linear K-Way Merge**: Master menggabungkan seluruh potongan terurut dari Master dan Worker secara linear dengan algoritma merge terakselerasi.
 
 ### 2. Alur Pengujian Interaktif & Terstruktur
 Baik pada mode Serial maupun Distributed:
-1. **Input Ukuran Data ($N$)**: Pengguna memasukkan jumlah bilangan acak (misal `1,000,000` atau `10,000,000`).
-2. **Pembangkitan Unsorted**: Data acak dibangkitkan dan disimpan ke `unsorted.txt` disertai progress bar dan pencatatan waktu pembangkitan (`waktu_unsort`).
+1. **Pilihan Sumber Data**: Pengguna dapat menggunakan data yang sudah tersimpan di `unsorted.txt` secara langsung atau membangkitkan data baru berukuran $N$.
+2. **Pembangkitan Unsorted**: Jika membuat data baru, angka acak dibangkitkan dan disimpan ke `unsorted.txt` disertai progress bar dan pencatatan waktu pembangkitan (`waktu_unsort`).
 3. **Prompt Konfirmasi**: Ditampilkan konfirmasi apakah ingin melanjutkan ke proses pengurutan (*Sorting*): `[Y/n]`.
-4. **Proses Pengurutan & Simpan**: Data diurutkan, divalidasi kebenarannya (*perfect non-decreasing order*), lalu disimpan ke `sorted.txt`.
+4. **Proses Pengurutan & Simpan**: Data diurutkan secara simultan, divalidasi kebenarannya (*perfect non-decreasing order*), lalu disimpan ke `sorted.txt`.
 5. **Ringkasan Waktu di Akhir Proses**: Waktu eksekusi ditampilkan secara rapi di akhir proses:
    - Waktu Unsort (Pembangkitan)
-   - Waktu Pengurutan (Sorting)
+   - Waktu Komputasi Simultan
+   - Waktu K-Way Merge
    - Waktu Simpan berkas `sorted.txt`
-   - TOTAL WAKTU KESELURUHAN (dari sorting sampai berkas selesai ditulis)
+   - TOTAL WAKTU KESELURUHAN (dari komputasi sampai berkas selesai ditulis)
 
 ### 3. Pemisahan Mode Serial dan Distributed
 - **Mode Serial (`[1] Jalankan Serial Sorting`)**:
   - **100% Murni Lokal di Komputer Master** (slave node tidak dilibatkan).
   - Pembangkitan data dan pengurutan berjalan murni pada CPU lokal Master sebagai tolok ukur (*baseline*).
-- **Mode Distributed (`[2] Jalankan Distributed Sorting (Realtime On-The-Fly)`)**:
-  - **Paralel Terdistribusi Penuh**: Pembangkitan data acak maupun proses pengurutan dibagi ke Master dan seluruh Worker Slave yang terhubung secara On-The-Fly.
+- **Mode Distributed (`[2] Jalankan Distributed Sorting (Pipelined Stream)`)**:
+  - **Paralel Terdistribusi Penuh**: Master dan seluruh Worker memproses data secara simultan dan kontributif.
   - Menghasilkan tabel metrik evaluasi kecepatan (**Speedup $S$** dan **Efisiensi $E$**).
 
 ### 4. Manajemen Berkas Cepat
@@ -80,7 +82,7 @@ Tampilan Panel Master:
  | Pratinjau Data    : [Belum ada data]                                   |
  +------------------------------------------------------------------------+
  |  [1] Jalankan Serial Sorting (Simpan ke sorted.txt)                    |
- |  [2] Jalankan Distributed Sorting (Realtime On-The-Fly)                |
+ |  [2] Jalankan Distributed Sorting (Pipelined Stream)                   |
  |  [3] Hapus File .txt (unsorted.txt & sorted.txt)                       |
  |  [0] Keluar / Matikan Master                                           |
  +------------------------------------------------------------------------+

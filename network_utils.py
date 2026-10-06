@@ -86,9 +86,10 @@ def send_packet(sock: socket.socket, payload_obj: Any, progress_callback=None) -
     """
     try:
         raw_data = pickle.dumps(payload_obj, protocol=pickle.HIGHEST_PROTOCOL)
-        if len(raw_data) > 2048:
+        if len(raw_data) > 4096:
             compressed = zlib.compress(raw_data, level=1)
-            if len(compressed) < len(raw_data):
+            # Hanya gunakan kompresi jika mampu menghemat minimal 10% bandwidth
+            if len(compressed) < len(raw_data) * 0.90:
                 body = compressed
                 header = struct.pack(HEADER_STRUCT, len(body) | FLAG_COMPRESSED)
             else:

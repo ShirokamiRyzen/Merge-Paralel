@@ -368,15 +368,13 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 chunk_id = packet.get("chunk_id", 0)
                 n_items = len(data_chunk)
 
-                print_header(f"TUGAS KOMPUTASI PARALEL: CHUNK #{chunk_id}", f"Jumlah Data: {n_items:,} integer | {worker_name}")
-                print_progress_bar(1, 3, prefix="Penerimaan Stream TCP", suffix=f"{n_items:,} data diterima (1/3)")
+                sys.stdout.write(f"\r  {Colors.BRIGHT_CYAN}➔ [Chunk #{chunk_id}]{Colors.RESET} Memproses {n_items:,} data dengan {worker_threads} Thread CPU... ")
+                sys.stdout.flush()
 
                 t_start = time.perf_counter()
                 data_chunk = parallel_sort_data(data_chunk, n_threads=worker_threads)
                 t_end = time.perf_counter()
                 sort_duration = t_end - t_start
-
-                print_progress_bar(2, 3, prefix="Proses Sorting", suffix=f"Selesai ({sort_duration:.4f} dtk) (2/3)")
 
                 response = {
                     "status": "OK",
@@ -386,19 +384,12 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     "sort_time": sort_duration,
                     "data": data_chunk,
                 }
-                t_send_start = time.perf_counter()
-                # Mengirim balik hasil terurut dengan streaming kontinu
-                if send_packet(
-                    sock, 
-                    response,
-                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Balik TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
-                ):
-                    t_send_end = time.perf_counter()
-                    print_progress_bar(3, 3, prefix="Pengiriman Balik TCP", suffix=f"{t_send_end - t_send_start:.4f} dtk (3/3)")
-                    print_success(f"Chunk #{chunk_id} ({n_items:,} data) berhasil diurutkan & dikembalikan ke Master!")
-                    print_info(f"Worker kembali STANDBY. Siap menerima tugas sorting berikutnya...\n")
+                # Mengirim balik hasil terurut
+                if send_packet(sock, response):
+                    sys.stdout.write(f"\r  {Colors.BRIGHT_GREEN}[✓] [Chunk #{chunk_id}]{Colors.RESET} {n_items:,} data terurut ({sort_duration:.4f}s) -> Dikirim balik ke Master!     \n")
+                    sys.stdout.flush()
                 else:
-                    print_error("Gagal mengirim data kembali ke Master.")
+                    print_error(f"Gagal mengirim data Chunk #{chunk_id} kembali ke Master.")
                     break
 
             elif cmd == "PING":
