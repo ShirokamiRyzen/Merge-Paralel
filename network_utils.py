@@ -102,10 +102,12 @@ def send_packet(sock: socket.socket, payload_obj: Any, progress_callback=None) -
         total_bytes = len(body)
         sock.sendall(header)
 
-        # Transmisi streaming kontinu dengan chunk 256 KB
+        # Transmisi streaming kontinu dengan chunk 256 KB.
+        # Progress callback di-throttle (maks ~8x/detik) agar tidak membanjiri terminal.
         view = memoryview(body)
         sent = 0
         chunk_size = 262144
+        last_emit = 0.0
         while sent < total_bytes:
             chunk_len = min(chunk_size, total_bytes - sent)
             n = sock.send(view[sent:sent + chunk_len])
@@ -113,7 +115,10 @@ def send_packet(sock: socket.socket, payload_obj: Any, progress_callback=None) -
                 return False
             sent += n
             if progress_callback:
-                progress_callback(sent, total_bytes)
+                now = time.monotonic()
+                if sent >= total_bytes or (now - last_emit) >= 0.12:
+                    last_emit = now
+                    progress_callback(sent, total_bytes)
 
         return True
     except (socket.error, BrokenPipeError, ConnectionResetError):
@@ -134,6 +139,7 @@ def recv_packet(sock: socket.socket, progress_callback=None) -> Optional[Any]:
         view = memoryview(buffer)
         received = 0
         chunk_size = 262144
+        last_emit = 0.0
         while received < payload_length:
             chunk_len = min(chunk_size, payload_length - received)
             n = sock.recv_into(view[received:], chunk_len)
@@ -141,7 +147,10 @@ def recv_packet(sock: socket.socket, progress_callback=None) -> Optional[Any]:
                 return None
             received += n
             if progress_callback:
-                progress_callback(received, payload_length)
+                now = time.monotonic()
+                if received >= payload_length or (now - last_emit) >= 0.12:
+                    last_emit = now
+                    progress_callback(received, payload_length)
 
         if is_compressed:
             buffer = zlib.decompress(buffer)

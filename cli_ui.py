@@ -177,7 +177,8 @@ def print_progress_bar(current: int, total: int, prefix: str = "", suffix: str =
     filled_len = int(length * current // total)
     bar = fill * filled_len + "-" * (length - filled_len)
 
-    sys.stdout.write(f"\r  {Colors.CYAN}{prefix:<24}{Colors.RESET} [{Colors.BRIGHT_GREEN}{bar}{Colors.RESET}] {Colors.BOLD}{Colors.BRIGHT_YELLOW}{percent:5.1f}%{Colors.RESET} {Colors.DIM}{suffix}{Colors.RESET}")
+    # "\033[K" menghapus sisa karakter lama di baris (mencegah tampilan "nyampah")
+    sys.stdout.write(f"\r {Colors.CYAN}{prefix:<24}{Colors.RESET} [{Colors.BRIGHT_GREEN}{bar}{Colors.RESET}] {Colors.BOLD}{Colors.BRIGHT_YELLOW}{percent:5.1f}%{Colors.RESET} {Colors.DIM}{suffix}{Colors.RESET}\033[K")
     sys.stdout.flush()
     if current >= total:
         sys.stdout.write("\n")

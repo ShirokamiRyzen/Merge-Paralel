@@ -573,6 +573,17 @@ def _master_local_on_fly_task(n_items: int, chunk_id: int, n_threads: int, seed:
     }
 
 
+def broadcast_summary(server: MasterServer, title: str, lines: List[str]) -> None:
+    """Mengirim ringkasan hasil ke seluruh Worker yang masih terhubung,
+    agar Worker dapat menampilkan laporan akhir yang sama seperti Master."""
+    payload = {"cmd": "SUMMARY", "title": title, "lines": lines}
+    for w in server.get_live_workers():
+        try:
+            send_packet(w["sock"], payload)
+        except Exception:
+            pass
+
+
 def run_distributed_sorting_on_fly(server: MasterServer, n_total: int = DEFAULT_DATA_SIZE, waktu_unsort: Optional[float] = None) -> Optional[Tuple[float, bool, List[int], int]]:
     """
     Mode Distributed Sorting Realtime On-The-Fly:
@@ -792,33 +803,44 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
     print(f" {Colors.CYAN}•{Colors.RESET} Mode Eksekusi        : {Colors.BOLD}{Colors.BRIGHT_GREEN}Pipelined Stream (Kedua Komputer Bekerja Bersamaan){Colors.RESET}")
 
     n_total = len(data)
-    # Tentukan ukuran batch/chunk streaming agar transmisi ringan dan kedua node bisa langsung bekerja
-    if n_total <= 100_000:
-        chunk_size = max(10_000, n_total // (total_computers * 2))
-    elif n_total <= 2_000_000:
-        chunk_size = 50_000
-    else:
-        chunk_size = 100_000
+    # Tentukan ukuran chunk streaming: cukup kecil agar transfer ringan dan pipelining
+    # berjalan, tetapi tidak terlalu banyak agar tidak membanjiri jaringan/terminal.
+    # Jumlah chunk ditargetkan sekitar `CHUNKS_PER_NODE` per node.
+    CHUNKS_PER_NODE = 16
+    target_chunks = max(total_computers * CHUNKS_PER_NODE, 1)
+    chunk_size = max(10_000, (n_total + target_chunks - 1) // target_chunks)
+    # Batasi besar tiap transfer TCP agar tetap ringan
+    chunk_size = min(chunk_size, 1_000_000)
 
     raw_chunks = [data[i:i + chunk_size] for i in range(0, n_total, chunk_size)]
     num_chunks = len(raw_chunks)
 
-    print(f" {Colors.CYAN}•{Colors.RESET} Partisi Pipelining   : {Colors.BOLD}{num_chunks} chunk stream{Colors.RESET} (~{chunk_size:,} data per chunk)")
+    print(f" {Colors.CYAN}•{Colors.RESET} Partisi Pipelining : {Colors.BOLD}{num_chunks} chunk stream{Colors.RESET} (~{chunk_size:,} data per chunk)")
 
     # Siapkan antrean tugas untuk Master dan seluruh Worker
     master_queue: queue.Queue = queue.Queue()
     worker_queues: Dict[int, queue.Queue] = {w["id"]: queue.Queue() for w in active_workers}
 
-    # Distribusi chunk secara proporsional dan selang-seling (interleaved)
-    # sehingga Master dan seluruh Worker langsung menerima tugas pertama secara bersamaan
-    all_targets = ["master"] + [w["id"] for w in active_workers]
+    # Distribusi chunk secara proporsional terhadap kapasitas thread tiap node
+    # (weighted round-robin). Setiap node menerima porsi tetapnya sehingga beban
+    # benar-benar terdistribusi dan tidak ada node yang "merampas" jatah node lain.
+    targets = ["master"] + [w["id"] for w in active_workers]
+    capacities = [master_threads] + [w.get("threads", 1) for w in active_workers]
+    total_capacity = sum(capacities) or 1
+    assigned = [0] * len(targets)
     for idx, c_data in enumerate(raw_chunks):
-        target = all_targets[idx % len(all_targets)]
+        # Pilih node dengan kekurangan porsi (deficit) terbesar agar hasilnya proporsional
+        deficits = [
+            ((idx + 1) * capacities[i] / total_capacity) - assigned[i]
+            for i in range(len(targets))
+        ]
+        node_i = max(range(len(targets)), key=lambda i: deficits[i])
+        assigned[node_i] += 1
         chunk_id = idx + 1
-        if target == "master":
+        if targets[node_i] == "master":
             master_queue.put((chunk_id, c_data))
         else:
-            worker_queues[target].put((chunk_id, c_data))
+            worker_queues[targets[node_i]].put((chunk_id, c_data))
 
     t_dist_total_start = time.perf_counter()
 
@@ -902,23 +924,13 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
                         suffix=f"{w_name}: Chunk #{c_id} Selesai ({completed_chunks}/{num_chunks})"
                     )
 
-        # Thread pekerja lokal Master Node
+        # Thread pekerja lokal Master Node (hanya mengerjakan porsi tetapnya sendiri)
         def _master_local_worker_task():
             while True:
                 try:
                     c_id, c_data = master_queue.get_nowait()
                 except queue.Empty:
-                    # Work-stealing: jika Master sudah selesai tapi antrean worker masih ada yang belum diambil
-                    stolen = False
-                    for w_q in worker_queues.values():
-                        try:
-                            c_id, c_data = w_q.get_nowait()
-                            stolen = True
-                            break
-                        except queue.Empty:
-                            pass
-                    if not stolen:
-                        break
+                    break
 
                 t_m_start = time.perf_counter()
                 sorted_chunk = parallel_sort_data(c_data, n_threads=master_threads)
@@ -961,6 +973,36 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
 
         for t in workers_threads_list:
             t.join()
+
+        # Fallback: proses sisa chunk yang tertinggal (mis. akibat worker terputus) di Master
+        leftover = []
+        for q in [master_queue] + list(worker_queues.values()):
+            while True:
+                try:
+                    leftover.append(q.get_nowait())
+                except queue.Empty:
+                    break
+        for c_id, c_data in leftover:
+            t_m_start = time.perf_counter()
+            sorted_chunk = parallel_sort_data(c_data, n_threads=master_threads)
+            t_m_end = time.perf_counter()
+            m_duration = t_m_end - t_m_start
+            with results_lock:
+                results.append({
+                    "chunk_id": c_id,
+                    "worker_name": "Master Node (Lokal CPU)",
+                    "threads": master_threads,
+                    "sorted_chunk": sorted_chunk,
+                    "worker_sort_time": m_duration,
+                    "roundtrip_time": m_duration,
+                })
+            node_stats["Master Node (Lokal CPU)"]["chunks"] += 1
+            node_stats["Master Node (Lokal CPU)"]["items"] += len(sorted_chunk)
+            node_stats["Master Node (Lokal CPU)"]["sort_time"] += m_duration
+        if leftover:
+            with progress_lock:
+                completed_chunks += len(leftover)
+            print_progress_bar(completed_chunks, num_chunks, prefix="Komputasi Simultan", suffix=f"Fallback Master: {len(leftover)} chunk")
 
         for dead_w in failed_workers:
             server.remove_dead_worker(dead_w)
@@ -1030,16 +1072,28 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
         t_dist_total_end = time.perf_counter()
         total_distributed_time = t_dist_total_end - t_dist_total_start
 
-        # Ringkasan Waktu Keseluruhan
+        # Ringkasan Waktu Keseluruhan (ditampilkan juga di sisi Worker Client)
         print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}RINGKASAN WAKTU DISTRIBUTED SORTING (SIMULTAN):{Colors.RESET}")
-        print(box_border())
+        summary_lines = []
+        summary_lines.append(box_border())
+        summary_lines.append(box_line(f"Total Data Terurut : {Colors.BOLD}{len(final_sorted_data):,} data{Colors.RESET}"))
+        summary_lines.append(box_line(f"Total Komputer : {Colors.BOLD}{total_computers} node{Colors.RESET} (1 Master + {total_computers - 1} Worker)"))
+        if is_valid:
+            summary_lines.append(box_line(f"Status Validasi : {Colors.BRIGHT_GREEN}BERHASIL (Data Terurut Sempurna){Colors.RESET}"))
+        else:
+            summary_lines.append(box_line(f"Status Validasi : {Colors.BRIGHT_RED}GAGAL (Data Rusak/Tidak Terurut){Colors.RESET}"))
         if waktu_unsort is not None:
-            print(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
-        print(box_line(f"Waktu Komputasi Simultan    : {Colors.BOLD}{concurrent_compute_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"Waktu K-Way Merge           : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"Waktu Simpan sorted.txt     : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"TOTAL WAKTU KESELURUHAN     : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari komputasi s/d simpan){Colors.RESET}"))
-        print(box_border())
+            summary_lines.append(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
+        summary_lines.append(box_line(f"Waktu Komputasi Simultan : {Colors.BOLD}{concurrent_compute_time:.6f} detik{Colors.RESET}"))
+        summary_lines.append(box_line(f"Waktu K-Way Merge : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
+        summary_lines.append(box_line(f"Waktu Simpan sorted.txt : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
+        summary_lines.append(box_line(f"TOTAL WAKTU KESELURUHAN : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari komputasi s/d simpan){Colors.RESET}"))
+        summary_lines.append(box_border())
+        for line in summary_lines:
+            print(line)
+
+        # Tampilkan ringkasan yang sama di sisi Worker Client
+        broadcast_summary(server, "RINGKASAN WAKTU DISTRIBUTED SORTING (SIMULTAN)", summary_lines)
 
         return total_distributed_time, is_valid, final_sorted_data, total_computers, total_cluster_threads
     finally:

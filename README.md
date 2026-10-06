@@ -12,8 +12,9 @@ Dilengkapi fitur **Realtime On-The-Fly Processing** dan **Auto-Discovery Jaringa
 ### 1. Pipelined Stream Concurrent Sorting (Kedua Komputer Bekerja Bersamaan)
 - **Eliminasi Bottleneck Jaringan**: Menghilangkan hambatan di mana Master mengirim separuh data berukuran raksasa sekaligus lalu diam menunggu Slave. Data dipartisi menjadi *streaming chunks* berukuran ringan (~50.000 data per batch).
 - **Komputasi Simultan Sejak Detik Pertama**: Master langsung menyortir porsi lokalnya di CPU Master, sementara Worker Slave menyortir porsi di CPU Worker secara bersamaan tanpa saling menunggu.
-- **Dynamic Work-Stealing**: Jika salah satu komputer menyelesaikan porsinya lebih cepat, komputer tersebut otomatis membantu menyelesaikan sisa chunk yang belum diproses.
+- **Alokasi Proporsional per Node**: Setiap komputer langsung menerima porsi tetap sesuai kapasitas thread CPU-nya (weighted round-robin), sehingga beban kerja benar-benar terdistribusi merata dan tidak ada node yang mengambil jatah node lain.
 - **Linear K-Way Merge**: Master menggabungkan seluruh potongan terurut dari Master dan Worker secara linear dengan algoritma merge terakselerasi.
+- **Ringkasan Terkirim ke Semua Node**: Setelah komputasi selesai, Master otomatis mengirim laporan ringkasan (waktu, validasi, total data) ke setiap Worker, lalu Worker menampilkan prompt [Enter] sebelum kembali STANDBY.
 
 ### 2. Alur Pengujian Interaktif & Terstruktur
 Baik pada mode Serial maupun Distributed:

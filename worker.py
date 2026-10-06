@@ -230,6 +230,19 @@ def select_or_discover_master() -> Optional[Tuple[str, int]]:
 
 
 
+STREAM_PROGRESS_MIN_BYTES = 8 * 1024 * 1024
+
+
+def stream_progress(prefix: str):
+    """Membuat callback progres transfer yang hanya tampil untuk transfer besar (>= 8 MB),
+    sehingga chunk kecil tidak membanjiri terminal dengan progress bar."""
+    def _cb(cur: int, tot: int):
+        if tot < STREAM_PROGRESS_MIN_BYTES:
+            return
+        print_progress_bar(cur, tot, prefix=prefix, suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+    return _cb
+
+
 def run_worker(host: str, port: int, worker_name: Optional[str] = None):
     """
     Fungsi utama worker untuk menghubungkan diri ke Master dan
@@ -278,7 +291,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
             # Menerima paket streaming secara kontinu
             packet = recv_packet(
                 sock,
-                progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Menerima Stream TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                progress_callback=stream_progress("Menerima Stream TCP")
             )
             if packet is None:
                 print_warning("Koneksi terputus dari Master. Worker berhenti.")
@@ -314,9 +327,9 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 }
                 t_send_start = time.perf_counter()
                 if send_packet(
-                    sock, 
+                    sock,
                     response,
-                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Balik TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                    progress_callback=stream_progress("Mengirim Balik TCP")
                 ):
                     t_send_end = time.perf_counter()
                     print_progress_bar(3, 3, prefix="Pengiriman Balik TCP", suffix=f"{t_send_end - t_send_start:.4f} dtk (3/3)")
@@ -352,9 +365,9 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 }
                 t_send_start = time.perf_counter()
                 if send_packet(
-                    sock, 
+                    sock,
                     response,
-                    progress_callback=lambda cur, tot: print_progress_bar(cur, tot, prefix="Mengirim Stream TCP", suffix=f"{cur/(1024*1024):.1f}/{tot/(1024*1024):.1f} MB")
+                    progress_callback=stream_progress("Mengirim Stream TCP")
                 ):
                     t_send_end = time.perf_counter()
                     print_success(f"Chunk #{chunk_id} ({n_items:,} data acak) berhasil dibangkitkan & dikirim ke Master!")
@@ -399,6 +412,18 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                 print_info("Menerima instruksi SHUTDOWN dari Master. Menutup koneksi...")
                 break
 
+            elif cmd == "SUMMARY":
+                title = packet.get("title", "RINGKASAN DARI MASTER NODE")
+                lines = packet.get("lines", [])
+                print_header(title, "Dikirim otomatis oleh Master Node")
+                for line in lines:
+                    print(line)
+                try:
+                    input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali STANDBY (Ctrl+C untuk keluar)...{Colors.RESET}")
+                except (KeyboardInterrupt, EOFError):
+                    pass
+                print_info("Worker kembali STANDBY. Menunggu tugas berikutnya...\n")
+
             else:
                 print_warning(f"Perintah tidak dikenali: {cmd}")
 
@@ -422,10 +447,9 @@ def run_worker_cli():
             break
         host, port = target
         run_worker(host=host, port=port)
-        print(f"\n{Colors.DIM}Kembali ke mode auto-scan dalam 2 detik (Ctrl+C untuk keluar)...{Colors.RESET}")
         try:
-            time.sleep(2)
-        except KeyboardInterrupt:
+            input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke mode auto-scan (Ctrl+C untuk keluar)...{Colors.RESET}")
+        except (KeyboardInterrupt, EOFError):
             break
 
 
