@@ -1,3 +1,6 @@
 /sorted.txt
 /unsorted.txt
 /__pycache__
+/build
+/dist
+*.spec

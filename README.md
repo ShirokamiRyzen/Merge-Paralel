@@ -52,6 +52,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 ```text
 Merge-Paralel/
 ├── main.py # Pusat kendali CLI (Master / Worker / Local Parallel / Hapus File)
+├── gui_app.py # GUI Tkinter (Master / Worker / Local Parallel) - versi grafis
 ├── master.py # Master Node (TCP Server + UDP Beacon Discovery)
 ├── worker.py # Worker Node (TCP Client + Infinity Scan Discovery)
 ├── network_utils.py # Framing TCP (pickle+zstd), progress, UDP Discovery
@@ -71,6 +72,46 @@ Merge-Paralel/
 ## 🚀 3. Panduan Menjalankan (Multi-Device, Satu Wi-Fi / Hotspot)
 
 > Pastikan semua perangkat terhubung ke jaringan yang sama.
+
+### Versi GUI (Tkinter)
+
+Tersedia versi grafis tanpa perlu ketik menu di terminal:
+
+```bash
+python gui_app.py
+```
+
+Jendela GUI memiliki 3 tab:
+- **Master Node** — mulai/stop server, lihat daftar worker terhubung, Generate Data, Serial Sorting, Distributed Sorting, Hapus File.
+- **Worker Node** — Auto-Scan (UDP) / hubungkan manual ke IP Master, lalu terima & urutkan chunk.
+- **Local Parallel** — 1 komputer, semua thread CPU, tanpa jaringan.
+
+Dilengkapi konsol berwarna (mendukung kode ANSI) dan progress bar real-time. Versi CLI (`main.py`) tetap tersedia dan berfungsi sama.
+
+### Versi .EXE (Windows)
+
+Sudah tersedia hasil build siap pakai: **`dist/MergeSortGUI.exe`** — cukup klik dua kali, tanpa perlu instal Python. Letakkan `.exe` di folder proyek bila ingin memakai berkas `unsorted.txt`/`sorted.txt` yang sama (berkas data dibuat di folder tempat `.exe` dijalankan).
+
+**Build ulang `.exe` (setelah mengubah kode):**
+
+```bash
+# 1. Pasang PyInstaller (sekali saja)
+pip install pyinstaller
+
+# 2. Bangun satu berkas .exe (GUI tanpa jendela konsol)
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name MergeSortGUI gui_app.py
+```
+
+Hasil: **`dist\MergeSortGUI.exe`** (±24 MB, onefile). Untuk startup lebih cepat dan folder distribusi, ganti `--onefile` dengan `--onedir`.
+
+Prasyarat & catatan:
+
+- Python 3.8+ (diuji 3.14) dan `tkinter` (sudah bawaan Python Windows).
+- `numpy` & `zstandard` ikut dibundel bila terpasang, sehingga `.exe` memakai jalur cepat.
+- Mode onefile menjalankan 2 proses (bootloader + aplikasi) — normal.
+- `.spec`, `build/`, dan `dist/` sudah masuk `.gitignore`.
+
+### Versi CLI
 
 ### Langkah 1 — Master Node (Komputer 1)
 

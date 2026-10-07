@@ -49,6 +49,7 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 | Berkas | Tanggung jawab |
 | ------ | -------------- |
 | `main.py` | Menu utama: pilih peran (Master/Worker/Local Parallel), hapus berkas |
+| `gui_app.py` | Antarmuka grafis Tkinter: tab Master/Worker/Local Parallel, konsol ANSI, progress bar (versi GUI dari `main.py`) |
 | `master.py` | MasterServer, serial & distributed sorting, metrik, CLI Master |
 | `worker.py` | Client: discovery, loop perintah, sorting lokal, kirim balik hasil |
 | `network_utils.py` | Framing TCP (pickle + zstd/zlib), progress callback, UDP discovery |
@@ -136,6 +137,31 @@ Memasang dependensi eksternal:
 ```bash
 pip install -r requirements.txt
 ```
+
+### 3.6 `gui_app.py` — Antarmuka Grafis (GUI)
+
+GUI berbasis **Tkinter** (standard library, tanpa dependensi tambahan) yang membungkus
+seluruh alur CLI. Dijalankan dengan `python gui_app.py`.
+
+| Simbol | Deskripsi |
+| ------ | --------- |
+| `AnsiConsole(tk.Text)` | Text widget yang memahami kode ANSI (warna/bold), `\r` (overwrite baris, untuk progress) dan `\n`; escape non-warna (mis. `ESC[K`) diabaikan |
+| `QueueWriter(io.TextIOBase)` | Stream `sys.stdout`/`sys.stderr` yang meneruskan teks ke antrean thread-safe agar aman dari thread latar |
+| `gui_print_progress_bar(...)` | Pengganti `print_progress_bar` di `cli_ui`/`master`/`worker`, mengirim event progress ke progress bar GUI |
+| `GuiWorker` | Worker Node ramah-GUI: konek, `REGISTER`, loop perintah (`SORT`, `GENERATE_UNSORTED`, `SORT_ON_FLY`, `SUMMARY`, `PING`, `SHUTDOWN`), bisa dihentikan (tanpa `input()` blocking) |
+| `MergeSortGUI` | Kelas utama: 3 tab (Master/Worker/Local Parallel), konsol, progress bar, auto-refresh status |
+| `main()` | Entry point: patch `print_progress_bar` lalu `root.mainloop()` |
+
+Cara kerja integrasi tanpa mengubah backend:
+
+1. `master.py`/`network_utils.py`/`fastsort.py` dipakai apa adanya.
+2. `sys.stdout`/`sys.stderr` dialihkan ke `QueueWriter`; thread utama GUI (via `after`) men-drain antrean ke `AnsiConsole` dan progress bar.
+3. `print_progress_bar` pada modul `cli_ui`, `master`, dan `worker` di-*monkeypatch* ke versi GUI (`gui_print_progress_bar`).
+4. Operasi berat (generate, sort serial/distributed/local) berjalan di *worker thread*; tombol dikunci (`_set_controls_enabled`) selama proses agar UI tetap responsif.
+5. Worker memakai `GuiWorker` (bukan `worker.run_worker`) agar ringkasan dari Master cukup ditampilkan di konsol tanpa menunggu `[Enter]`.
+
+Tampilan (font, tombol, tab) diatur terpusat di `MergeSortGUI._configure_appearance()`
+(font default 12, tema `clam`, padding seragam untuk tab aktif/non-aktif, dsb.).
 
 ---
 
@@ -389,6 +415,46 @@ python main.py
 - **Akselerasi NumPy**: `np.sort`/`np.all`/`np.concatenate` untuk sort, validasi, dan merge; data int dikirim sebagai `int32` (hemat bandwidth) dan bebas GIL.
 - **Mode On-The-Fly** (`SORT_ON_FLY` / `run_distributed_sorting_on_fly`): tersedia di modul, berguna ketika data dibangkitkan secara lokal di tiap node untuk menghindari transfer raw besar.
 - **Keadilan vs makespan**: kini dipilih **dynamic work-stealing** (satu antrean bersama) agar node cepat mengerjakan lebih banyak dan node lambat tidak menjadi straggler; ini mengoptimalkan *makespan* (waktu total) ketimbang kontribusi yang identik antar node.
+
+- **Meta UI**: versi CLI memakai `main.py` (menu teks), versi grafis memakai `gui_app.py` (Tkinter). Keduanya berbagi backend yang sama; `gui_app.py` tidak mengubah modul lain selain mem-*patch* `print_progress_bar` saat runtime.
+
+---
+
+## 12. Antarmuka Grafis (GUI) & Build `.exe`
+
+### 12.1 Menjalankan GUI
+
+```bash
+python gui_app.py
+```
+
+Dua instance GUI dapat dijalankan pada satu komputer (mis. Master di tab/instance 1, Worker di instance 2) karena Worker mendukung loopback `127.0.0.1`.
+
+### 12.2 Build `.exe` (Windows, PyInstaller)
+
+```bash
+# sekali saja
+pip install pyinstaller
+
+# build ulang
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name MergeSortGUI gui_app.py
+```
+
+| Flag | Fungsi |
+| ---- | ------ |
+| `--onefile` | Menghasilkan satu berkas `.exe` |
+| `--windowed` | Tidak membuka jendela konsol (khusus GUI) |
+| `--name` | Nama berkas output |
+| `--clean` | Membersihkan cache build sebelumnya |
+
+Hasil: `dist\MergeSortGUI.exe`. Untuk startup lebih cepat, ganti `--onefile` menjadi `--onedir` (menghasilkan folder `dist\MergeSortGUI\`).
+
+Catatan:
+
+- `numpy` & `zstandard` otomatis dibundel bila terpasang, sehingga `.exe` memakai jalur cepat.
+- Berkas data (`unsorted.txt`, `sorted.txt`) dibuat di *working directory* tempat `.exe` dijalankan — letakkan `.exe` di folder proyek agar datanya konsisten.
+- Mode `--onefile` menjalankan 2 proses (bootloader + aplikasi); ini normal.
+- Artefak `build/`, `dist/`, dan `*.spec` sudah dikecualikan lewat `.gitignore`.
 
 ---
 
