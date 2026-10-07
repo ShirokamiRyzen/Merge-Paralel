@@ -9,13 +9,16 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 
 ## 📌 1. Fitur Utama
 
-### 1.1 Pipelined Stream Concurrent Sorting (Master + Worker Bekerja Bersamaan)
+### 1.1 Pipelined Stream Concurrent Sorting
 
-- **Streaming Chunk Adaptif**: Data dipartisi menjadi potongan (*chunk*) berukuran dinamis. Jumlah chunk ditargetkan sekitar `16 × jumlah node` dengan batas maksimum `1.000.000` data per chunk, sehingga transfer tetap ringan tanpa membanjiri jaringan/terminal.
-- **Komputasi Simultan Sejak Detik Pertama**: Master langsung menyortir porsi lokalnya, sementara setiap Worker menyortir porsinya di CPU masing-masing tanpa saling menunggu.
-- **Alokasi Proporsional per Node (Weighted Round-Robin)**: Setiap komputer menerima porsi tetap sesuai kapasitas **thread CPU**-nya. Contoh: Master 12 Th + Worker 4 Th → Master ≈ 75% chunk, Worker ≈ 25% chunk. Tidak ada node yang "merampas" jatah node lain.
+- **Streaming Chunk Adaptif**: Data dipartisi menjadi potongan (*chunk*) berukuran dinamis. Jumlah chunk ditargetkan sekitar `32 × jumlah node` dengan batas maksimum `500.000` data per chunk, sehingga transfer tetap ringan dan granularitas *work-stealing* lebih halus.
+- **Komputasi Bersamaan Sejak Detik Pertama**: Master langsung menyortir porsi lokalnya, sementara setiap Worker menyortir porsinya di CPU masing-masing tanpa saling menunggu.
+- **Dynamic Work-Stealing (Anti-Straggler)**: Semua node mengambil tugas dari **satu antrean bersama**. Node tercepat otomatis mengerjakan lebih banyak, sedangkan node/perangkat lambat tidak lagi menahan seluruh kluster (mengatasi *load imbalance* pada perangkat heterogen).
+- **Akselerasi NumPy**: Sorting menggunakan rutin vektor native NumPy (bebas GIL) alih-alih `ThreadPoolExecutor` yang terhambat GIL. Validasi urutan dan K-Way Merge juga dihitung secara vektor.
+- **Transfer Ringkas via Int32 + Zstandard**: Angka dikirim sebagai `ndarray[int32]` (~4 MB/juta vs ~5 MB pickle list) dan dikompresi dengan `zstandard` level 1 yang jauh lebih gesit dari zlib — menekan **bottleneck Wireless/LAN**.
 - **Linear K-Way Merge**: Master menggabungkan seluruh potongan terurut secara linear di akhir proses.
 - **Ringkasan Terkirim ke Semua Node**: Setelah komputasi selesai, Master otomatis mengirim laporan ringkasan (total data, status validasi, rincian waktu) ke setiap Worker, lalu Worker menampilkan prompt **[Enter]** sebelum kembali STANDBY.
+- **Seed Sesi Kluster**: Master membuat satu `session_seed` di awal, mengirimkannya ke semua Worker, dan menampilkannya di **awal & akhir** proses (plus tabel `seed` tiap chunk). Worker menampilkan `session_seed` yang sama saat menerima tugas dan pada ringkasan akhir — jika seed identik, kedua node berada pada sesi yang sama. Master juga memverifikasi balik seed tiap chunk dan menandai bila ada yang tidak sinkron.
 - **Progress Bar Bersih**: Callback progres jaringan di-*throttle* (~8×/detik) dan transfer kecil (< 8 MB) tidak menampilkan bar, sehingga konsol tidak "nyampah".
 
 ### 1.2 Auto-Discovery Jaringan (UDP)
@@ -29,7 +32,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 1. **Pilih Sumber Data**: gunakan `unsorted.txt` yang ada, atau bangkitkan data baru berukuran $N$.
 2. **Pembangkitan Unsorted** (opsional, terdistribusi bila ada Worker) disertai progress bar dan pencatatan `waktu_unsort`.
 3. **Konfirmasi** lanjut ke pengurutan: `[Y/n]`.
-4. **Pengurutan Simultan + Validasi** (*perfect non-decreasing order*) + simpan ke `sorted.txt`.
+4. **Pengurutan + Validasi** (*perfect non-decreasing order*) + simpan ke `sorted.txt`.
 5. **Ringkasan Waktu** di akhir proses (ditampilkan juga di sisi Worker).
 
 ### 1.4 Pemisahan Mode Serial dan Distributed
@@ -47,15 +50,17 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 
 ```text
 Merge-Paralel/
-├── main.py           # Pusat kendali CLI (Master / Worker / Hapus File)
-├── master.py         # Master Node (TCP Server + UDP Beacon Discovery)
-├── worker.py         # Worker Node (TCP Client + Infinity Scan Discovery)
-├── network_utils.py  # Framing TCP (pickle+zlib), progress, UDP Discovery
-├── cli_ui.py         # Antarmuka ANSI (box, warna, progress bar)
-├── unsorted.txt      # Data mentah sebelum diurutkan (otomatis dibuat)
-├── sorted.txt        # Hasil akhir terurut (otomatis dibuat)
-├── README.md         # Dokumentasi singkat (berkas ini)
-└── docs.md           # Dokumentasi teknis lengkap
+├── main.py # Pusat kendali CLI (Master / Worker / Hapus File)
+├── master.py # Master Node (TCP Server + UDP Beacon Discovery)
+├── worker.py # Worker Node (TCP Client + Infinity Scan Discovery)
+├── network_utils.py # Framing TCP (pickle+zstd), progress, UDP Discovery
+├── fastsort.py # Akselerasi NumPy: sort vektor, packing int32, validasi & merge
+├── cli_ui.py # Antarmuka ANSI (box, warna, progress bar)
+├── requirements.txt # Dependensi opsional (numpy, zstandard)
+├── unsorted.txt # Data mentah sebelum diurutkan (otomatis dibuat)
+├── sorted.txt # Hasil akhir terurut (otomatis dibuat)
+├── README.md # Dokumentasi singkat (berkas ini)
+└── docs.md # Dokumentasi teknis lengkap
 ```
 
 > 📖 Dokumentasi teknis mendalam (arsitektur, protokol, algoritma, troubleshooting) ada di **[docs.md](docs.md)**.
@@ -86,7 +91,7 @@ Pilih **[1] MASTER NODE (Server)**. Panel Master tampil:
 | Pratinjau Data   : [1, 3, 7, ... (10,000,000 angka) ..., 9999998]      |
 +------------------------------------------------------------------------+
 | [1] Jalankan Serial Sorting (Simpan ke sorted.txt)                     |
-| [2] Jalankan Distributed Sorting (Pipelined Stream - Kedua Node Simultan) |
+| [2] Jalankan Distributed Sorting (Pipelined Stream) |
 | [3] Hapus File .txt (unsorted.txt & sorted.txt)                       |
 | [0] Keluar / Matikan Master                                            |
 +------------------------------------------------------------------------+
@@ -129,23 +134,23 @@ Tekan **[Enter]** untuk terhubung. Setelah selesai, Worker menampilkan ringkasan
 Contoh keluaran mode Distributed:
 
 ```text
-Rincian Kontribusi Komputasi Simultan Tiap Node:
+Rincian Kontribusi Tiap Node:
  +------------------------------+----------+--------------+------------------+--------------+--------------+
  | Node Komputer                | Thread   | Chunk        | Total Data       | Waktu Sort   | Status       |
  +------------------------------+----------+--------------+------------------+--------------+--------------+
- | Master Node (Lokal CPU)      | 12 Th    | 15 chunk     | 150,000,000 data | 17.1770s     | Simultan     |
- | Worker-1 (DESKTOP-L5EMIAD)   | 12 Th    | 15 chunk     | 150,000,000 data | 17.2061s     | Simultan     |
+ | Master Node (Lokal CPU)      | 12 Th    | 15 chunk     | 150,000,000 data | 17.1770s     | Selesai     |
+ | Worker-1 (DESKTOP-L5EMIAD)   | 12 Th    | 15 chunk     | 150,000,000 data | 17.2061s     | Selesai     |
  +------------------------------+----------+--------------+------------------+--------------+--------------+
 
-RINGKASAN WAKTU DISTRIBUTED SORTING (SIMULTAN):
+RINGKASAN WAKTU DISTRIBUTED SORTING:
  +------------------------------------------------------------------------+
  | Total Data Terurut        : 300,000,000 data                           |
- | Total Komputer            : 2 node (1 Master + 1 Worker)               |
+ | Total Komputer            : 2 node                |
  | Status Validasi           : BERHASIL (Data Terurut Sempurna)           |
- | Waktu Komputasi Simultan  : 17.2061 detik                              |
+ | Waktu Komputasi : 17.2061 detik                              |
  | Waktu K-Way Merge         : 3.4210 detik                               |
  | Waktu Simpan sorted.txt   : 4.1205 detik                               |
- | TOTAL WAKTU KESELURUHAN   : 24.7476 detik (dari komputasi s/d simpan)  |
+ | TOTAL WAKTU KESELURUHAN   : 24.7476 detik   |
  +------------------------------------------------------------------------+
 ```
 
@@ -174,7 +179,16 @@ New-NetFirewallRule -DisplayName "MergeSort UDP" -Direction Inbound -LocalPort 5
 
 ## 🛠️ 6. Kebutuhan Sistem
 
-- **Python 3.8+** (diuji pada 3.14) — tanpa dependensi eksternal (hanya *standard library*).
+- **Python 3.8+** (diuji pada 3.14).
+- **Dependensi opsional** (disarankan dipasang untuk performa terbaik):
+
+```bash
+pip install -r requirements.txt
+```
+
+- `numpy` — sorting vektor native, packing `int32`, validasi & merge cepat.
+- `zstandard` — kompresi payload TCP cepat untuk menekan bottleneck Wireless.
+- Tanpa kedua paket di atas, sistem tetap berjalan dengan *standard library* (fallback otomatis, hanya lebih lambat).
 - Jaringan Wi-Fi/LAN yang sama antar perangkat (atau beberapa tab pada satu komputer).
 
 ---

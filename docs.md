@@ -50,15 +50,16 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 | `main.py` | Menu utama: pilih peran (Master/Worker), hapus berkas |
 | `master.py` | MasterServer, serial & distributed sorting, metrik, CLI Master |
 | `worker.py` | Client: discovery, loop perintah, sorting lokal, kirim balik hasil |
-| `network_utils.py` | Framing TCP (pickle + zlib), progress callback, UDP discovery |
+| `network_utils.py` | Framing TCP (pickle + zstd/zlib), progress callback, UDP discovery |
+| `fastsort.py` | Akselerasi NumPy: sort vektor, packing `int32`, validasi & merge |
 | `cli_ui.py` | Warna ANSI, box, header, tabel, progress bar (aman Windows/Linux) |
 
 ### 3.1 `master.py` — Fungsi & Kelas Kunci
 
 | Simbol | Deskripsi |
 | ------ | --------- |
-| `parallel_sort_data(arr, n_threads)` | Sort paralel: pecah array menjadi `n_threads` bagian, sort tiap bagian via `ThreadPoolExecutor`, gabung lalu sort final (Timsort) |
-| `is_sorted(arr)` | Validasi urutan non-decreasing |
+| `parallel_sort_data(arr, n_threads)` | Sort vektor via `fastsort.sort_values` (NumPy `np.sort`, fallback `list.sort`) — bebas GIL dan jauh lebih cepat dari thread Python |
+| `is_sorted(arr)` | Validasi urutan non-decreasing secara vektor (`fastsort.is_sorted_values`) |
 | `format_data_preview(arr, max_items)` | Pratinjau angka untuk UI |
 | `save_to_file` / `load_from_file` | Baca/tulis `unsorted.txt` & `sorted.txt` (satu angka per baris) |
 | `delete_txt_files` | Hapus kedua berkas data |
@@ -114,14 +115,15 @@ Setiap paket = **header 8 byte** + **body**.
 
 ```text
 +----------------+--------------------+----------------------------+
-| Header (8 B)   | Flag (bit 63)      | Body (pickle, opsional zlib)|
-| big-endian u64 | 1 = terkompresi    | payload serialized          |
+| Header (8 B) | Flag codec | Body (pickle, opsional terkompresi) |
+| big-endian u64 | bit63=zlib, bit62=zstd | payload serialized |
 +----------------+--------------------+----------------------------+
 ```
 
 - `HEADER_STRUCT = ">Q"` (unsigned 64-bit big-endian), `HEADER_SIZE = 8`.
-- `FLAG_COMPRESSED = 1 << 63`. Panjang asli = `raw_length & ~FLAG_COMPRESSED`.
-- **Kompresi**: bila payload > 4096 byte, dicoba `zlib.compress(level=1)`; dipakai hanya jika menghemat ≥ 10% bandwidth.
+- `FLAG_ZLIB = 1 << 63`, `FLAG_ZSTD = 1 << 62`. Panjang asli = `raw_length & ~(FLAG_ZLIB | FLAG_ZSTD)`.
+- **Kompresi adaptif**: bila payload > 4096 byte, dicoba `zstandard` level 1 (dipakai bila menghemat ≥ 8%); jika tidak menguntungkan, fallback `zlib` level 1 (≥ 10%); jika semua tidak hemat, payload dikirim mentah. zstd jauh lebih cepat dari zlib sehingga cocok untuk bottleneck Wi-Fi.
+- **Representasi data**: integer besar dikirim sebagai `ndarray[int32]` (~4 MB/juta angka) alih-alih `list` pickle (~5 MB/juta) — lebih ringkas dan praktis nol-overhead saat serialisasi.
 - Transfer dipecah per 256 KB; callback progres dipanggil maksimum tiap `0.12` detik (selalu di akhir).
 
 ### 4.2 Objek yang Dipertukarkan
@@ -133,10 +135,10 @@ Semua objek di-`pickle`. Umumnya `dict` dengan kunci `cmd`.
 | `cmd` | Arah | Field | Fungsi |
 | ----- | ---- | ----- | ------ |
 | `REGISTER` | Worker → Master | `name`, `hostname`, `threads` | Registrasi awal Worker |
-| `SORT` | Master → Worker | `chunk_id`, `data` | Kirim chunk mentah untuk disortir |
+| `SORT` | Master → Worker | `chunk_id`, `data`, `seed`, `session_seed` | Kirim chunk mentah untuk disortir (dengan seed chunk & seed sesi kluster) |
 | `SORT_ON_FLY` | Master → Worker | `chunk_id`, `count`, `seed` | Worker bangkitkan + sortir di RAM (tanpa kirim data) |
 | `GENERATE_UNSORTED` | Master → Worker | `chunk_id`, `count`, `seed` | Worker bangkitkan data acak & kirim ke Master |
-| `SUMMARY` | Master → Worker | `title`, `lines` | Laporan akhir agar tampil di sisi Worker |
+| `SUMMARY` | Master → Worker | `title`, `lines` | Laporan akhir agar tampil di sisi Worker (termasuk `session_seed`) |
 | `PING` | Master → Worker | — | Health-check; Worker balas `PONG` |
 | `SHUTDOWN` | Master → Worker | — | Instruksi menutup koneksi |
 
@@ -144,15 +146,24 @@ Semua objek di-`pickle`. Umumnya `dict` dengan kunci `cmd`.
 
 ```python
 {
-  "status": "OK",
-  "chunk_id": <int>,
-  "worker_name": <str>,
-  "threads": <int>,
-  "sort_time": <float>,   # detik (khusus SORT / SORT_ON_FLY)
-  "gen_time": <float>,    # detik (khusus GENERATE_UNSORTED)
-  "data": <list[int]>
+"status": "OK",
+"chunk_id": <int>,
+"worker_name": <str>,
+"threads": <int>,
+"seed": <int>, # seed chunk (dikembalikan untuk verifikasi, khusus SORT)
+"session_seed": <int>, # seed sesi kluster
+"sort_time": <float>, # detik (khusus SORT / SORT_ON_FLY)
+"gen_time": <float>, # detik (khusus GENERATE_UNSORTED)
+"data": <list[int]>
 }
 ```
+
+**Seed sesi (`session_seed`)**: Master membuat satu `session_seed` di awal sesi
+distributed sorting, mengirimkannya pada setiap `SORT`, dan menampilkannya di awal & akhir
+proses. Worker menampilkan seed yang sama saat tugas mulai dan pada ringkasan akhir, serta
+mengembalikannya pada setiap respons. Master memverifikasi kecocokan seed dan menandai bila
+ada node yang tidak sinkron. Seed identik di kedua sisi = bukti keduanya berjalan pada satu
+sesi paralel yang sama.
 
 ---
 
@@ -184,50 +195,50 @@ Semua objek di-`pickle`. Umumnya `dict` dengan kunci `cmd`.
 
 ## 6. Algoritma
 
-### 6.1 Sort Paralel Lokal (`parallel_sort_data`)
+### 6.1 Sort Lokal (`parallel_sort_data` / `fastsort.sort_values`)
 
 ```text
-if n_threads <= 1 or n < 20_000:
-    arr.sort()                      # Timsort
+if NumPy tersedia dan len(arr) >= 20_000:
+    return np.sort(np.asarray(arr, dtype=int32))   # native C, melepas GIL
+else:
+    arr.sort()                                     # fallback Timsort Python
     return arr
-
-sub_chunks = bagi arr menjadi n_threads bagian ~sama besar
-ThreadPoolExecutor(max_workers=n_threads):
-    tiap thread -> sub_chunk.sort()
-merged = gabung semua sub_chunk
-merged.sort()                       # merge linear final (Timsort)
-return merged
 ```
+
+> Catatan: paralelisme berbasis thread (`ThreadPoolExecutor`) tidak dipakai lagi karena
+> terhambat GIL dan tidak menambah kecepatan untuk beban CPU. Paralelisme nyata kini
+> bersifat **antar-mesin** (distributed). NumPy melepas GIL dan memakai rutin C vektor.
 
 ### 6.2 Distributed Sorting — Pipelined Stream (`run_distributed_sorting`)
 
 **1) Ukuran chunk adaptif**
 
 ```text
-CHUNKS_PER_NODE = 16
-target_chunks   = max(total_computers * 16, 1)
-chunk_size      = max(10_000, ceil(n_total / target_chunks))
-chunk_size      = min(chunk_size, 1_000_000)   # batas transfer TCP
+CHUNKS_PER_NODE = 32
+target_chunks = max(total_computers * 32, 1)
+chunk_size = max(10_000, ceil(n_total / target_chunks))
+chunk_size = min(chunk_size, 500_000) # batas transfer TCP agar buffer Wi-Fi tidak banjir
 ```
 
-**2) Alokasi proporsional (weighted round-robin)**
+**2) Dynamic Work-Stealing**
 
-Kapasitas tiap node = jumlah thread CPU-nya. Untuk chunk ke-`i`, pilih node dengan
-*kekurangan porsi* (deficit) terbesar:
+Seluruh chunk dimasukkan ke **satu antrean bersama** (`task_queue`, thread-safe).
+Setiap node (Master lokal + tiap Worker) mengambil chunk berikutnya begitu ia selesai:
 
 ```text
-capacities = [threads_master, threads_worker_1, ...]
-deficit[i] = ((idx+1) * capacities[i] / sum(capacities)) - assigned[i]
-node       = argmax(deficit)
+task_queue = Queue()
+for idx, chunk in enumerate(raw_chunks): task_queue.put((idx + 1, chunk))
+# tiap node loop:  c_id, c_data = task_queue.get_nowait()  -> proses -> ulangi
 ```
 
-Contoh: 20 chunk, kapasitas 12 vs 4 → Master 15 chunk, Worker 5 chunk.
+Dengan cara ini node tercepat otomatis mengerjakan lebih banyak, sehingga node/perangkat
+lambat **tidak lagi menjadi straggler** yang menahan seluruh kluster (mengatasi load imbalance).
 
 **3) Eksekusi simultan**
 
-- Master: thread lokal mengambil dari `master_queue` dan menyortir dengan seluruh thread CPU-nya.
-- Tiap Worker: satu *dispatcher thread* mengirim chunk via TCP, menunggu hasil, mencatat statistik.
-- Keduanya berjalan bersamaan; **tidak ada perampasan antrean** (tanpa work-stealing) agar distribusi adil.
+- Master: thread lokal mengambil dari `task_queue` dan menyortir dengan NumPy.
+- Tiap Worker: satu *dispatcher thread* mengambil dari `task_queue`, mengirim chunk via TCP secara streaming, menunggu hasil, mencatat statistik.
+- Keduanya berjalan bersamaan; **work-stealing** memastikan beban mengikuti kecepatan node.
 
 **4) Fallback**: setelah semua thread selesai, sisa chunk (mis. akibat Worker terputus) diproses Master.
 
@@ -235,7 +246,7 @@ Contoh: 20 chunk, kapasitas 12 vs 4 → Master 15 chunk, Worker 5 chunk.
 
 ```text
 hasil_chunks = seluruh chunk terurut dari semua node
-final = gabung(hasil_chunks); final.sort()   # merge linear
+final = fastsort.merge_sorted_chunks(hasil_chunks) # concatenate + np.sort (vektor)
 validasi: len(final) == n_total dan is_sorted(final)
 simpan  : sorted.txt
 ```
@@ -258,12 +269,12 @@ simpan  : sorted.txt
 Master CLI [2]
    │
    ├─ (opsional) generate_random_data → unsorted.txt
-   ├─ Load data
-   ├─ Bagi chunk + alokasi proporsional (weighted round-robin)
-   ├─ Beacon.pause()
-   ├─ ThreadPool:
-   │     ├─ Master local thread  ──► parallel_sort_data ──► results[]
-   │     └─ Worker dispatcher    ──► TCP SORT ──► Worker sort ──► TCP hasil ──► results[]
+├─ Load data
+├─ Bagi chunk + isi satu `task_queue` (dynamic work-stealing)
+├─ Beacon.pause()
+├─ ThreadPool (tiap node mengambil dari `task_queue`):
+│ ├─ Master local thread ──► parallel_sort_data (NumPy) ──► results[]
+│ └─ Worker dispatcher ──► TCP SORT (int32+zstd) ──► Worker sort ──► TCP hasil ──► results[]
    ├─ Beacon.resume()
    ├─ K-Way Merge + validasi + simpan sorted.txt
    ├─ Cetak ringkasan  ──► broadcast_summary() ──► Worker menampilkan ringkasan + [Enter]
@@ -281,11 +292,13 @@ Master CLI [2]
 | `DEFAULT_DATA_SIZE` | `1_000_000` | `master.py` |
 | Range angka acak | `1 .. 10_000_000` | `master.py`, `worker.py` |
 | Header TCP | `>Q` (8 byte) | `network_utils.py` |
-| Ambang kompresi | `> 4096` byte & hemat ≥ 10% | `network_utils.py` |
+| Ambang kompresi | `> 4096` byte; zstd ≥ 8% / zlib ≥ 10% | `network_utils.py` |
+| Level kompresi zstd | `1` (throughput tinggi) | `network_utils.py` |
 | Throttle progress | `0.12` detik | `network_utils.py` |
 | Ambang progress Worker | `8 MB` | `worker.py` |
-| Chunk per node | `16` | `master.py` |
-| Batas ukuran chunk | `10_000 .. 1_000_000` | `master.py` |
+| Chunk per node | `32` | `master.py` |
+| Batas ukuran chunk | `10_000 .. 500_000` | `master.py` |
+| Ambang NumPy | `20_000` elemen | `fastsort.py` |
 | Buffer socket | 4 MB (`SO_RCVBUF`/`SO_SNDBUF`) | `network_utils.py` |
 
 Argumen CLI Worker:
@@ -338,11 +351,12 @@ python main.py
 
 ## 11. Catatan Desain & Keterbatasan
 
-- **Konsol & UI**: seluruh program menggunakan `print`/ANSI sederhana; tidak ada dependensi eksternal.
+- **Konsol & UI**: seluruh program menggunakan `print`/ANSI sederhana. Dependensi eksternal bersifat **opsional** (lihat `requirements.txt`): `numpy` & `zstandard`. Bila tidak terpasang, sistem otomatis memakai fallback standard library (lebih lambat).
 - **Hosting aman**: `eval` tidak dipakai; deserialisasi memakai `pickle` standar (asumsi jaringan terpercaya/LAN).
-- **Kompresi**: hanya dipakai bila menguntungkan; angka acak besar umumnya tidak terkompresi banyak.
+- **Kompresi**: adaptif dan hanya dipakai bila menguntungkan. Untuk angka acak murni, zstd masih menghemat ~15%; untuk data terurut bisa ~30%.
+- **Akselerasi NumPy**: `np.sort`/`np.all`/`np.concatenate` untuk sort, validasi, dan merge; data int dikirim sebagai `int32` (hemat bandwidth) dan bebas GIL.
 - **Mode On-The-Fly** (`SORT_ON_FLY` / `run_distributed_sorting_on_fly`): tersedia di modul, berguna ketika data dibangkitkan secara lokal di tiap node untuk menghindari transfer raw besar.
-- **Keadilan vs makespan**: dipilih alokasi proporsional (adil, deterministik) alih-alih work-stealing dinamis agar kontribusi tiap node terlihat merata dan reprodusibel.
+- **Keadilan vs makespan**: kini dipilih **dynamic work-stealing** (satu antrean bersama) agar node cepat mengerjakan lebih banyak dan node lambat tidak menjadi straggler; ini mengoptimalkan *makespan* (waktu total) ketimbang kontribusi yang identik antar node.
 
 ---
 

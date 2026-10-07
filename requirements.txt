@@ -1,0 +1,9 @@
+# Dependensi opsional untuk akselerasi performa (sistem tetap berjalan
+# dengan standard library saja bila paket ini tidak terpasang).
+#
+# numpy     : sorting vektor native C + transfer integer int32 (hemat bandwidth
+#             & memori, serta bebas GIL agar benar-benar paralel antar mesin).
+# zstandard : kompresi payload TCP super cepat (2-5x lebih gesit dari zlib)
+#             untuk menekan bottleneck transfer Wireless/LAN.
+numpy>=2.0
+zstandard>=0.22

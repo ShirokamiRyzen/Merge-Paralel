@@ -16,12 +16,25 @@ import time
 import threading
 from typing import Any, Optional, List, Dict
 
+try:
+    import zstandard as _zstd
+    HAS_ZSTD = True
+except ImportError:  # pragma: no cover - fallback ke zlib
+    _zstd = None
+    HAS_ZSTD = False
+
 # Ukuran header TCP: 8 byte integer unsigned (64-bit Big-Endian / >Q)
 HEADER_STRUCT = ">Q"
 HEADER_SIZE = struct.calcsize(HEADER_STRUCT)
 
-# Flag bit-63 untuk menandai payload yang dikompresi zlib adaptif
-FLAG_COMPRESSED = 1 << 63
+# Flag codec kompresi pada bit tinggi header.
+#   bit-63 = zlib (legacy), bit-62 = zstd (lebih cepat & rasio lebih baik).
+FLAG_ZLIB = 1 << 63
+FLAG_ZSTD = 1 << 62
+FLAG_MASK = FLAG_ZLIB | FLAG_ZSTD
+
+# Level kompresi zstd: level 1 = throughput tinggi, cocok untuk penekan bottleneck Wi-Fi.
+_ZSTD_LEVEL = 1
 
 # Port default
 DEFAULT_MASTER_PORT = 5000
@@ -81,23 +94,32 @@ def is_socket_alive(sock: socket.socket) -> bool:
 
 def send_packet(sock: socket.socket, payload_obj: Any, progress_callback=None) -> bool:
     """
-    Mengirim objek Python dengan adaptive zlib compression & 8-byte framing.
+    Mengirim objek Python dengan adaptive zstd/zlib compression & 8-byte framing.
     Mendukung transmisi streaming kontinu dan pelaporan progres real-time.
     """
     try:
         raw_data = pickle.dumps(payload_obj, protocol=pickle.HIGHEST_PROTOCOL)
+        body = raw_data
+        flag = 0
         if len(raw_data) > 4096:
-            compressed = zlib.compress(raw_data, level=1)
-            # Hanya gunakan kompresi jika mampu menghemat minimal 10% bandwidth
-            if len(compressed) < len(raw_data) * 0.90:
-                body = compressed
-                header = struct.pack(HEADER_STRUCT, len(body) | FLAG_COMPRESSED)
-            else:
-                body = raw_data
-                header = struct.pack(HEADER_STRUCT, len(body))
-        else:
-            body = raw_data
-            header = struct.pack(HEADER_STRUCT, len(body))
+            # 1) Prioritas zstd (jauh lebih cepat dari zlib pada payload besar).
+            if HAS_ZSTD:
+                try:
+                    compressed = _zstd.compress(raw_data, _ZSTD_LEVEL)
+                    # Pakai bila menghemat minimal 8% bandwidth.
+                    if len(compressed) < len(raw_data) * 0.92:
+                        body = compressed
+                        flag = FLAG_ZSTD
+                except Exception:
+                    body = raw_data
+                    flag = 0
+            # 2) Fallback zlib bila zstd tidak tersedia/kurang menguntungkan.
+            if flag == 0:
+                compressed = zlib.compress(raw_data, level=1)
+                if len(compressed) < len(raw_data) * 0.90:
+                    body = compressed
+                    flag = FLAG_ZLIB
+        header = struct.pack(HEADER_STRUCT, len(body) | flag)
 
         total_bytes = len(body)
         sock.sendall(header)
@@ -132,8 +154,8 @@ def recv_packet(sock: socket.socket, progress_callback=None) -> Optional[Any]:
         if not header_data:
             return None
         (raw_length,) = struct.unpack(HEADER_STRUCT, header_data)
-        is_compressed = bool(raw_length & FLAG_COMPRESSED)
-        payload_length = raw_length & ~FLAG_COMPRESSED
+        codec = raw_length & FLAG_MASK
+        payload_length = raw_length & ~FLAG_MASK
 
         buffer = bytearray(payload_length)
         view = memoryview(buffer)
@@ -152,7 +174,9 @@ def recv_packet(sock: socket.socket, progress_callback=None) -> Optional[Any]:
                     last_emit = now
                     progress_callback(received, payload_length)
 
-        if is_compressed:
+        if codec == FLAG_ZSTD and HAS_ZSTD:
+            buffer = _zstd.decompress(buffer)
+        elif codec == FLAG_ZLIB:
             buffer = zlib.decompress(buffer)
 
         return pickle.loads(buffer)

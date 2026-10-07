@@ -13,9 +13,9 @@ import sys
 import time
 import socket
 import argparse
-import concurrent.futures
 from typing import Optional, Tuple, List
 from network_utils import send_packet, recv_packet, discover_masters, WorkerScanner, DEFAULT_MASTER_PORT, get_local_ip, tune_socket
+import fastsort
 from cli_ui import (
     Colors, banner, clear_screen, print_header, print_success, print_info, 
     print_warning, print_error, print_task, print_progress_bar,
@@ -25,32 +25,11 @@ from cli_ui import (
 
 def parallel_sort_data(arr: List[int], n_threads: Optional[int] = None) -> List[int]:
     """
-    Mengurutkan array angka menggunakan seluruh thread CPU yang tersedia.
-    Membagi array menjadi sub-chunk yang diproses secara simultan via ThreadPoolExecutor,
-    lalu digabungkan secara cepat dengan run-merge linear Timsort.
+    Mengurutkan array angka menggunakan rutin vektor native NumPy (bila tersedia).
+    Jauh lebih cepat dari Timsort Python + ThreadPoolExecutor yang terhambat GIL.
+    Fallback ke `list.sort` murni bila NumPy tidak terpasang.
     """
-    if n_threads is None:
-        n_threads = os.cpu_count() or 1
-    n = len(arr)
-    if n_threads <= 1 or n < 20_000:
-        arr.sort()
-        return arr
-
-    sub_chunk_size = n // n_threads
-    sub_chunks = []
-    for t in range(n_threads):
-        start = t * sub_chunk_size
-        end = n if t == n_threads - 1 else (t + 1) * sub_chunk_size
-        sub_chunks.append(arr[start:end])
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
-        list(executor.map(lambda c: c.sort(), sub_chunks))
-
-    merged = []
-    for sc in sub_chunks:
-        merged.extend(sc)
-    merged.sort()
-    return merged
+    return fastsort.sort_values(arr, n_threads=n_threads)
 
 
 def select_or_discover_master() -> Optional[Tuple[str, int]]:
@@ -286,6 +265,8 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
 
     print_info(f"Worker siap ({Colors.BRIGHT_GREEN}STANDBY{Colors.RESET}). Menunggu tugas sorting...\n")
 
+    current_session_seed = None
+
     try:
         while True:
             # Menerima paket streaming secara kontinu
@@ -323,7 +304,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     "worker_name": worker_name,
                     "threads": worker_threads,
                     "sort_time": sort_duration,
-                    "data": data_chunk,
+                    "data": fastsort.to_int32(data_chunk),
                 }
                 t_send_start = time.perf_counter()
                 if send_packet(
@@ -361,7 +342,7 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     "chunk_id": chunk_id,
                     "worker_name": worker_name,
                     "gen_time": gen_duration,
-                    "data": data_chunk,
+                    "data": fastsort.to_int32(data_chunk),
                 }
                 t_send_start = time.perf_counter()
                 if send_packet(
@@ -379,9 +360,19 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
             elif cmd == "SORT":
                 data_chunk = packet.get("data", [])
                 chunk_id = packet.get("chunk_id", 0)
+                seed = packet.get("seed", None)
+                session_seed = packet.get("session_seed", None)
                 n_items = len(data_chunk)
 
-                sys.stdout.write(f"\r  {Colors.BRIGHT_CYAN}➔ [Chunk #{chunk_id}]{Colors.RESET} Memproses {n_items:,} data dengan {worker_threads} Thread CPU... ")
+                # Tampilkan SEED SESI saat tugas mulai (bukti sesi paralel yang sama).
+                if session_seed is not None and session_seed != current_session_seed:
+                    current_session_seed = session_seed
+                    print_header(
+                        f"Seed Sesi = {session_seed}",
+                        f"Node: {worker_name}"
+                    )
+                seed_label = f"seed_chunk={seed} | seed_sesi={session_seed}"
+                sys.stdout.write(f"\r {Colors.BRIGHT_CYAN}➔ [Chunk #{chunk_id} | {seed_label}]{Colors.RESET} Memproses {n_items:,} data dengan {worker_threads} Thread CPU... ")
                 sys.stdout.flush()
 
                 t_start = time.perf_counter()
@@ -394,12 +385,14 @@ def run_worker(host: str, port: int, worker_name: Optional[str] = None):
                     "chunk_id": chunk_id,
                     "worker_name": worker_name,
                     "threads": worker_threads,
+                    "seed": seed,
+                    "session_seed": session_seed,
                     "sort_time": sort_duration,
-                    "data": data_chunk,
+                    "data": fastsort.to_int32(data_chunk),
                 }
                 # Mengirim balik hasil terurut
                 if send_packet(sock, response):
-                    sys.stdout.write(f"\r  {Colors.BRIGHT_GREEN}[✓] [Chunk #{chunk_id}]{Colors.RESET} {n_items:,} data terurut ({sort_duration:.4f}s) -> Dikirim balik ke Master!     \n")
+                    sys.stdout.write(f"\r {Colors.BRIGHT_GREEN}[✓] [Chunk #{chunk_id} | {seed_label}]{Colors.RESET} {n_items:,} data terurut ({sort_duration:.4f}s) -> Dikirim balik ke Master! \n")
                     sys.stdout.flush()
                 else:
                     print_error(f"Gagal mengirim data Chunk #{chunk_id} kembali ke Master.")
