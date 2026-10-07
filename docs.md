@@ -15,6 +15,7 @@ komputer (**Master + Worker**) melalui dua mode:
 | Mode | Deskripsi | Fungsi utama |
 | ---- | --------- | ------------ |
 | **Serial** | 100% lokal di CPU Master (baseline) | `master.run_serial_sorting` |
+| **Local Parallel** | Satu komputer saja (tanpa jaringan/perangkat lain), seluruh thread/core CPU dipakai untuk menyortir chunk secara paralel, lalu K-Way Merge | `master.run_local_parallel_sorting` |
 | **Distributed (Pipelined Stream)** | Master & Worker menyortir porsi masing-masing secara simultan, hasil digabung di Master | `master.run_distributed_sorting` |
 
 Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitung **Speedup** & **Efisiensi**.
@@ -47,7 +48,7 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 
 | Berkas | Tanggung jawab |
 | ------ | -------------- |
-| `main.py` | Menu utama: pilih peran (Master/Worker), hapus berkas |
+| `main.py` | Menu utama: pilih peran (Master/Worker/Local Parallel), hapus berkas |
 | `master.py` | MasterServer, serial & distributed sorting, metrik, CLI Master |
 | `worker.py` | Client: discovery, loop perintah, sorting lokal, kirim balik hasil |
 | `network_utils.py` | Framing TCP (pickle + zstd/zlib), progress callback, UDP discovery |
@@ -67,6 +68,8 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 | `generate_random_data(n, server)` | Bangkitkan $N$ angka acak (terdistribusi bila ada Worker), simpan ke `unsorted.txt` |
 | `MasterServer` | TCP server: `start_server`, `get_live_workers`, `remove_dead_worker`, `shutdown` |
 | `run_serial_sorting(data, waktu_unsort)` | Mode serial murni lokal |
+| `run_local_parallel_sorting(data, waktu_unsort, n_threads)` | Mode paralel lokal: seluruh thread CPU, tanpa jaringan |
+| `run_local_parallel_cli()` | Menu interaktif Local Parallel (1 komputer, offline) |
 | `run_distributed_sorting(server, data, ...)` | Mode distributed pipelined stream |
 | `broadcast_summary(server, title, lines)` | Kirim ringkasan akhir ke seluruh Worker |
 | `print_comparison_metrics(...)` | Tabel Speedup & Efisiensi |

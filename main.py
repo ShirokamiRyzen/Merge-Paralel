@@ -32,12 +32,13 @@ def main():
         print(box_border())
         print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}MASTER NODE (Server){Colors.RESET} - Pusat Kontrol & Koordinasi Sorting"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Infinity Scan Master & Urutkan Data"))
-        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} (unsorted.txt & sorted.txt)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}LOCAL PARALLEL{Colors.RESET} - 1 Komputer, Semua Thread CPU (Tanpa Wi-Fi)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[4]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} (unsorted.txt & sorted.txt)"))
         print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar Program"))
         print(box_border())
 
         try:
-            choice = input(f"{Colors.BRIGHT_YELLOW}Pilih opsi [1-3, 0]: {Colors.RESET}").strip()
+            choice = input(f"{Colors.BRIGHT_YELLOW}Pilih opsi [1-4, 0]: {Colors.RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n")
             break
@@ -52,6 +53,12 @@ def main():
             input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke menu utama...{Colors.RESET}")
 
         elif choice == "3":
+            clear_screen()
+            banner()
+            master.run_local_parallel_cli()
+            input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke menu utama...{Colors.RESET}")
+
+        elif choice == "4":
             success, msg = master.delete_txt_files()
             if success:
                 print_success(msg)
@@ -64,7 +71,7 @@ def main():
             sys.exit(0)
 
         else:
-            print_warning("Pilihan tidak valid. Silakan pilih 1, 2, 3, atau 0.")
+            print_warning("Pilihan tidak valid. Silakan pilih 1, 2, 3, 4, atau 0.")
 
 
 if __name__ == "__main__":

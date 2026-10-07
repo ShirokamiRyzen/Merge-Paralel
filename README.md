@@ -35,9 +35,10 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 4. **Pengurutan + Validasi** (*perfect non-decreasing order*) + simpan ke `sorted.txt`.
 5. **Ringkasan Waktu** di akhir proses (ditampilkan juga di sisi Worker).
 
-### 1.4 Pemisahan Mode Serial dan Distributed
+### 1.4 Pemisahan Mode Serial, Local Parallel, dan Distributed
 
 - **Mode Serial (`[1]`)** — 100% lokal di Master, tanpa Worker. Menjadi *baseline*.
+- **Mode Local Parallel (`[3]`)** — hanya 1 komputer, **tanpa perangkat lain & tanpa Wi-Fi/LAN**. Seluruh thread/core CPU dipakai untuk menyortir banyak chunk secara paralel (NumPy melepas GIL), lalu digabung K-Way Merge. Cocok dijalankan *offline*.
 - **Mode Distributed (`[2]`)** — pipelined stream terdistribusi penuh, menghasilkan metrik **Speedup $S$** dan **Efisiensi $E$**.
 
 ### 1.5 Manajemen Berkas
@@ -50,7 +51,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 
 ```text
 Merge-Paralel/
-├── main.py # Pusat kendali CLI (Master / Worker / Hapus File)
+├── main.py # Pusat kendali CLI (Master / Worker / Local Parallel / Hapus File)
 ├── master.py # Master Node (TCP Server + UDP Beacon Discovery)
 ├── worker.py # Worker Node (TCP Client + Infinity Scan Discovery)
 ├── network_utils.py # Framing TCP (pickle+zstd), progress, UDP Discovery

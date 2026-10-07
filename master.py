@@ -1121,6 +1121,262 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
             server.beacon.resume()
 
 
+def run_local_parallel_sorting(data: List[int], waktu_unsort: Optional[float] = None,
+                               n_threads: Optional[int] = None) -> Tuple[float, bool, List[int]]:
+    """
+    Mode Local Parallel Sorting: memanfaatkan SELURUH thread CPU pada SATU komputer
+    tanpa membutuhkan perangkat lain maupun koneksi Wi-Fi/LAN.
+
+    Strategi:
+    - Data dipartisi menjadi banyak chunk kecil (beberapa chunk per thread) agar
+      beban merata ke semua core.
+    - Setiap chunk disortir secara paralel oleh ThreadPoolExecutor. NumPy melepas
+      GIL saat `np.sort`, sehingga thread benar-benar berjalan bersamaan di core
+      yang berbeda (bukan sekadar concurrency).
+    - Seluruh chunk terurut digabung kembali secara linear (K-Way Merge vektor).
+    """
+    n_total = len(data)
+    max_threads = os.cpu_count() or 1
+    if n_threads is None:
+        n_threads = max_threads
+    n_threads = max(1, min(int(n_threads), max_threads))
+
+    print_header(
+        "KOMPUTASI LOCAL PARALLEL SORTING",
+        f"{n_total:,} Elemen | {n_threads} Thread CPU Lokal (Tanpa Jaringan)"
+    )
+    print(f" {Colors.CYAN}•{Colors.RESET} Jumlah Data : {Colors.BOLD}{n_total:,} elemen{Colors.RESET}")
+    print(f" {Colors.CYAN}•{Colors.RESET} Pratinjau Asli : {format_data_preview(data)}")
+    print(f" {Colors.CYAN}•{Colors.RESET} Thread CPU Dipakai : {Colors.BOLD}{Colors.BRIGHT_GREEN}{n_threads} / {max_threads} thread{Colors.RESET}")
+    print(f" {Colors.CYAN}•{Colors.RESET} Mode Eksekusi : {Colors.BOLD}{Colors.BRIGHT_GREEN}Parallel Lokal (Offline){Colors.RESET}")
+
+    t_overall_start = time.perf_counter()
+
+    # Partisi adaptif: beberapa chunk per thread agar distribusi beban lebih merata.
+    CHUNKS_PER_THREAD = 8
+    target_chunks = max(n_threads * CHUNKS_PER_THREAD, 1)
+    chunk_size = max(10_000, (n_total + target_chunks - 1) // target_chunks)
+    chunk_size = min(chunk_size, 500_000)
+    raw_chunks = [data[i:i + chunk_size] for i in range(0, n_total, chunk_size)]
+    num_chunks = len(raw_chunks)
+
+    print(f" {Colors.CYAN}•{Colors.RESET} Partisi Data : {Colors.BOLD}{num_chunks} chunk{Colors.RESET} (~{chunk_size:,} data per chunk)")
+
+    results: List[Optional[List[int]]] = [None] * num_chunks
+    progress_lock = threading.Lock()
+    completed = 0
+
+    t_sort_start = time.perf_counter()
+
+    def _sort_chunk(idx: int, chunk: List[int]):
+        nonlocal completed
+        sorted_chunk = parallel_sort_data(chunk, n_threads=1)
+        results[idx] = sorted_chunk
+        with progress_lock:
+            completed += 1
+            print_progress_bar(
+                completed,
+                num_chunks,
+                prefix="Sort Paralel Lokal",
+                suffix=f"Chunk {completed}/{num_chunks} Selesai"
+            )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_threads) as executor:
+        futures = [executor.submit(_sort_chunk, i, c) for i, c in enumerate(raw_chunks)]
+        for fut in concurrent.futures.as_completed(futures):
+            fut.result()
+
+    t_sort_end = time.perf_counter()
+    sort_time = t_sort_end - t_sort_start
+
+    # K-Way Merge linear (vektor NumPy)
+    t_merge_start = time.perf_counter()
+    print_progress_bar(1, 2, prefix="K-Way Merge Lokal", suffix="Menggabungkan chunk terurut...")
+    final_sorted_data = fastsort.merge_sorted_chunks([r for r in results if r is not None])
+    print_progress_bar(2, 2, prefix="K-Way Merge Lokal", suffix="Selesai (100%)")
+    t_merge_end = time.perf_counter()
+    merge_time = t_merge_end - t_merge_start
+
+    print_success("Pengurutan Local Parallel Selesai!")
+    print(f" {Colors.CYAN}•{Colors.RESET} Hasil Terurut : {format_data_preview(final_sorted_data)}")
+
+    # Validasi
+    is_valid = (len(final_sorted_data) == n_total) and is_sorted(final_sorted_data)
+    print_progress_bar(1, 1, prefix="Validasi Urutan", suffix="Selesai (100%)")
+    if is_valid:
+        print_success("Validasi Urutan : BERHASIL (Data Terurut Sempurna)")
+    else:
+        print_error("Validasi Urutan : GAGAL (Data Rusak/Tidak Terurut)")
+
+    # Simpan ke sorted.txt
+    t_save_start = time.perf_counter()
+    save_to_file(final_sorted_data, FILE_SORTED)
+    t_save_end = time.perf_counter()
+    save_time = t_save_end - t_save_start
+    print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+    print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
+
+    t_overall_end = time.perf_counter()
+    total_overall_time = t_overall_end - t_overall_start
+
+    print(f"\n{Colors.BRIGHT_WHITE}{Colors.BOLD}RINGKASAN WAKTU LOCAL PARALLEL SORTING:{Colors.RESET}")
+    print(box_border())
+    print(box_line(f"Thread CPU Dipakai : {Colors.BOLD}{n_threads} thread{Colors.RESET}"))
+    print(box_line(f"Jumlah Chunk : {Colors.BOLD}{num_chunks} chunk{Colors.RESET}"))
+    if waktu_unsort is not None:
+        print(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
+    print(box_line(f"Waktu Sort Paralel : {Colors.BOLD}{sort_time:.6f} detik{Colors.RESET}"))
+    print(box_line(f"Waktu K-Way Merge : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
+    print(box_line(f"Waktu Simpan sorted.txt : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
+    print(box_line(f"TOTAL WAKTU KESELURUHAN : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_overall_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari sorting s/d simpan){Colors.RESET}"))
+    print(box_border())
+
+    return total_overall_time, is_valid, final_sorted_data
+
+
+def run_local_parallel_cli():
+    """
+    Menu CLI interaktif mode Local Parallel:
+    hanya 1 komputer, memanfaatkan seluruh thread CPU, tanpa perangkat lain
+    dan tanpa koneksi Wi-Fi/LAN. Menyediakan baseline Serial untuk perbandingan.
+    """
+    current_data = load_from_file(FILE_UNSORTED)
+    last_serial_time: Optional[float] = None
+    last_local_time: Optional[float] = None
+    last_local_threads: int = os.cpu_count() or 1
+    notification: Optional[str] = None
+    is_notif_warning: bool = False
+
+    if current_data is not None and len(current_data) > 0:
+        notification = f"Ditemukan '{FILE_UNSORTED}' ({len(current_data):,} data siap digunakan)!"
+
+    def _prepare_data() -> Optional[Tuple[List[int], Optional[float]]]:
+        """Memilih sumber data (pakai berkas / bangkitkan baru) + konfirmasi sorting."""
+        nonlocal current_data, notification, is_notif_warning
+        use_existing = False
+        if current_data is not None and len(current_data) > 0:
+            try:
+                pilih_data = input(f"\n{Colors.BRIGHT_YELLOW}Gunakan data yang ada ({len(current_data):,} data di {FILE_UNSORTED})? [Y/n]: {Colors.RESET}").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                pilih_data = "y"
+            if pilih_data not in ["n", "no", "tidak", "t"]:
+                use_existing = True
+
+        waktu_unsort: Optional[float] = None
+        if not use_existing:
+            try:
+                raw_n = input(f"\n{Colors.BRIGHT_YELLOW}Jumlah angka N acak positif [default 1,000,000]: {Colors.RESET}").strip()
+                n_items = int(raw_n.replace(".", "").replace(",", "")) if raw_n else DEFAULT_DATA_SIZE
+                if n_items <= 0:
+                    n_items = DEFAULT_DATA_SIZE
+            except ValueError:
+                n_items = DEFAULT_DATA_SIZE
+
+            data, waktu_unsort = generate_random_data(n_items)
+            current_data = data
+
+        try:
+            lanjut = input(f"\n{Colors.BRIGHT_YELLOW}Ingin melanjutkan ke pengurutan (Sorting)? [Y/n]: {Colors.RESET}").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            lanjut = "n"
+
+        if lanjut in ["n", "no", "tidak", "t"]:
+            notification = f"{len(current_data):,} data tersimpan di '{FILE_UNSORTED}'. Pengurutan dibatalkan."
+            is_notif_warning = False
+            return None
+        return current_data, waktu_unsort
+
+    while True:
+        clear_screen()
+        banner()
+
+        max_threads = os.cpu_count() or 1
+        data_count = len(current_data) if current_data is not None else 0
+        preview_str = format_data_preview(current_data, max_items=8)
+
+        unsorted_status = f"{Colors.BRIGHT_GREEN}ADA ({data_count:,} data){Colors.RESET}" if os.path.exists(FILE_UNSORTED) else f"{Colors.DIM}Belum ada{Colors.RESET}"
+        sorted_status = f"{Colors.BRIGHT_GREEN}ADA{Colors.RESET}" if os.path.exists(FILE_SORTED) else f"{Colors.DIM}Belum ada{Colors.RESET}"
+
+        print(box_border())
+        print(box_title(f"{Colors.BOLD}{Colors.BRIGHT_WHITE}PANEL LOCAL PARALLEL (SATU KOMPUTER){Colors.RESET}"))
+        print(box_border())
+        print(box_line(f"CPU Lokal Terdeteksi : {Colors.BOLD}{Colors.BRIGHT_GREEN}{max_threads} Thread{Colors.RESET}"))
+        print(box_line(f"Koneksi Jaringan : {Colors.BRIGHT_GREEN}TIDAK DIPERLUKAN (Offline){Colors.RESET}"))
+        print(box_line(f"File unsorted.txt : {unsorted_status}"))
+        print(box_line(f"File sorted.txt : {sorted_status}"))
+        print(box_line(f"Pratinjau Data : {preview_str}"))
+        print(box_border())
+        print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}Jalankan Local Parallel Sorting{Colors.RESET} (Semua Thread CPU)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}Jalankan Serial Sorting{Colors.RESET} (Baseline 1 CPU)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
+        print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Kembali ke Menu Utama"))
+        print(box_border())
+        print(f" {Colors.DIM}Mode ini hanya butuh 1 komputer: seluruh core CPU dipakai, tanpa Wi-Fi/LAN.{Colors.RESET}")
+
+        if notification:
+            if is_notif_warning:
+                print_warning(notification)
+            else:
+                print_success(notification)
+            notification = None
+            is_notif_warning = False
+
+        try:
+            choice = input(f"\n{Colors.BRIGHT_YELLOW}Pilih menu [1-3, 0]: {Colors.RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if choice == "1":
+            prepared = _prepare_data()
+            if not prepared:
+                continue
+            prepared_data, waktu_unsort = prepared
+
+            try:
+                raw_th = input(f"\n{Colors.BRIGHT_YELLOW}Jumlah thread CPU [default {max_threads}, maks {max_threads}]: {Colors.RESET}").strip()
+                n_threads = int(raw_th) if raw_th else max_threads
+            except ValueError:
+                n_threads = max_threads
+            n_threads = max(1, min(n_threads, max_threads))
+
+            t_local, _, sorted_res = run_local_parallel_sorting(prepared_data, waktu_unsort=waktu_unsort, n_threads=n_threads)
+            last_local_time = t_local
+            last_local_threads = n_threads
+            current_data = sorted_res
+
+            if last_serial_time is not None:
+                print_comparison_metrics(last_serial_time, last_local_time, total_computers=1)
+                print_info(f"Speedup murni dari paralelisme lokal: {n_threads} thread CPU pada 1 komputer.")
+            input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke panel kontrol...{Colors.RESET}")
+
+        elif choice == "2":
+            prepared = _prepare_data()
+            if not prepared:
+                continue
+            prepared_data, waktu_unsort = prepared
+
+            t_serial, _, sorted_res = run_serial_sorting(prepared_data, waktu_unsort=waktu_unsort)
+            last_serial_time = t_serial
+            current_data = sorted_res
+
+            if last_local_time is not None:
+                print_comparison_metrics(last_serial_time, last_local_time, total_computers=1)
+            input(f"\n{Colors.DIM}Tekan [Enter] untuk kembali ke panel kontrol...{Colors.RESET}")
+
+        elif choice == "3":
+            success, msg = delete_txt_files(FILE_UNSORTED, FILE_SORTED)
+            current_data = None
+            notification = msg
+            is_notif_warning = not success
+            continue
+
+        elif choice == "0":
+            break
+        else:
+            notification = "Pilihan tidak valid. Silakan pilih 1, 2, 3, atau 0."
+            is_notif_warning = True
+
+
 def print_comparison_metrics(t_serial: float, t_dist: float, total_computers: int, num_workers: int = 1):
     """Menampilkan tabel perbandingan, Speedup, dan Efisiensi."""
     speedup = t_serial / t_dist if t_dist > 0 else 0
