@@ -65,18 +65,38 @@ def format_data_preview(arr: Optional[List[int]], max_items: int = 8) -> str:
 
 
 def save_to_file(data: List[int], filename: str):
-    """Menyimpan list angka ke file teks (satu angka per baris)."""
+    """Menyimpan list angka ke file teks (satu angka per baris).
+
+    Ditulis per-chunk dengan jeda GIL singkat agar event loop GUI tetap
+    responsif ketika data berjumlah ratusan juta.
+    """
+    n = len(data)
+    chunk = 500_000
     with open(filename, "w", encoding="utf-8") as f:
-        f.write("\n".join(map(str, data)) + "\n")
+        if n == 0:
+            f.write("\n")
+            return
+        for start in range(0, n, chunk):
+            block = data[start:start + chunk]
+            f.write("\n".join(map(str, block)))
+            f.write("\n")
+            time.sleep(0.001)
 
 
 def load_from_file(filename: str) -> Optional[List[int]]:
-    """Membaca list angka dari file teks."""
+    """Membaca list angka dari file teks (per-batch, melepas GIL berkala)."""
     if not os.path.exists(filename):
         return None
     try:
+        data: List[int] = []
         with open(filename, "r", encoding="utf-8") as f:
-            return [int(line.strip()) for line in f if line.strip()]
+            for line in f:
+                line = line.strip()
+                if line:
+                    data.append(int(line))
+                    if len(data) % 1_000_000 == 0:
+                        time.sleep(0.001)
+        return data
     except Exception:
         return None
 
@@ -213,6 +233,7 @@ def generate_random_data(n: int, server: Optional[Any] = None) -> Tuple[List[int
             cur_batch = n - len(data) if b == num_batches - 1 else batch_size
             data.extend([random.randint(1, 10_000_000) for _ in range(cur_batch)])
             print_progress_bar(b + 1, num_batches, prefix="Generate Angka", suffix=f"{len(data):,}/{n:,}")
+            time.sleep(0.001)
 
         t_gen_end = time.perf_counter()
         time_generate = t_gen_end - t_gen_start
@@ -371,18 +392,25 @@ def run_serial_sorting(data: List[int], waktu_unsort: Optional[float] = None) ->
     t_overall_start = time.perf_counter()
 
     # 1. Timsort Blok Serial dengan Progress Bar
+    # Blok dibuat lebih kecil untuk data raksasa agar setiap `list.sort()`
+    # (Timsort C yang menahan GIL) singkat, sehingga event loop GUI tetap
+    # responsif. Untuk data kecil perilakunya tetap ~10 blok seperti semula.
     t_sort_start = time.perf_counter()
-    num_blocks = 10
-    block_size = len(data) // num_blocks
+    if len(data) <= 5_000_000:
+        block_size = max(1, len(data) // 10)
+    else:
+        block_size = 500_000
+    num_blocks = max(1, (len(data) + block_size - 1) // block_size)
     sorted_blocks = []
 
     for i in range(num_blocks):
         start = i * block_size
         end = len(data) if i == num_blocks - 1 else (i + 1) * block_size
-        block = data[start:end]
+        block = list(data[start:end])
         block.sort()
         sorted_blocks.append(block)
         print_progress_bar(i + 1, num_blocks, prefix="Timsort Serial Blok", suffix=f"Blok {i+1}/{num_blocks}")
+        time.sleep(0.001)
 
     # 2. K-Way Merge Serial dengan Progress Bar
     total_len = len(data)
@@ -392,6 +420,8 @@ def run_serial_sorting(data: List[int], waktu_unsort: Optional[float] = None) ->
     for val in heapq.merge(*sorted_blocks):
         sorted_data.append(val)
         count += 1
+        if count % 200_000 == 0:
+            time.sleep(0.001)
         if count % step == 0:
             print_progress_bar(count, total_len, prefix="Merge Serial CPU", suffix=f"{count:,}/{total_len:,}")
     if count > 0:

@@ -16,6 +16,7 @@ Kenapa modul ini ada:
 """
 
 import os
+import time
 from typing import Any, List, Optional, Sequence
 
 try:
@@ -38,17 +39,29 @@ def to_int32(values: Sequence[int]) -> Any:
     Mengubah list/iterable int menjadi `ndarray[int32]` bila menguntungkan
     (hemat ~20% bandwidth vs pickle list dan bebas kompresi yang boros).
     Jika NumPy tidak ada atau data kecil, nilai dikembalikan apa adanya.
+
+    Konversi dilakukan bertahap (per-chunk) dengan jeda GIL singkat agar event
+    loop GUI tidak membeku ("Not Responding") pada data berjumlah ratusan juta.
     """
     if not HAS_NUMPY:
         return values
     if isinstance(values, np.ndarray):
         return values if values.dtype == np.int32 else values.astype(np.int32, copy=False)
     try:
-        if len(values) >= NUMPY_THRESHOLD:
-            return np.asarray(values, dtype=np.int32)
+        n = len(values)
     except TypeError:
-        pass
-    return values
+        return values
+    if n < NUMPY_THRESHOLD:
+        return values
+    try:
+        arr = np.empty(n, dtype=np.int32)
+    except Exception:
+        return np.asarray(values, dtype=np.int32)
+    step = 1_000_000
+    for i in range(0, n, step):
+        arr[i:i + step] = values[i:i + step]
+        time.sleep(0.001)
+    return arr
 
 
 def to_list(values: Any) -> List[int]:
@@ -83,16 +96,36 @@ def sort_values(values: Any, n_threads: Optional[int] = None) -> Any:
 def is_sorted_values(values: Any) -> bool:
     """
     Validasi urutan non-decreasing secara vektor (tanpa loop Python per elemen).
-    Untuk 300 juta elemen, ini mengubah operasi dari menit menjadi milidetik.
+
+    Untuk data besar yang masih berupa `list`, validasi dilakukan per-chunk dengan
+    jeda GIL singkat agar event loop GUI tidak membeku, sekaligus menghindari
+    konversi seluruh list menjadi satu array raksasa.
     """
-    if HAS_NUMPY:
+    try:
+        n = len(values)
+    except TypeError:
+        return True
+    if n < 2:
+        return True
+    if HAS_NUMPY and n >= NUMPY_THRESHOLD:
         try:
-            if len(values) >= NUMPY_THRESHOLD:
-                arr = to_int32(values)
+            if isinstance(values, np.ndarray):
+                arr = values if values.dtype == np.int32 else values.astype(np.int32, copy=False)
                 return bool(np.all(arr[:-1] <= arr[1:]))
+            step = 500_000
+            prev = None
+            for i in range(0, n, step):
+                chunk = np.asarray(values[i:i + step], dtype=np.int32)
+                if chunk.size >= 2 and bool(np.any(chunk[:-1] > chunk[1:])):
+                    return False
+                if prev is not None and int(chunk[0]) < prev:
+                    return False
+                prev = int(chunk[-1])
+                time.sleep(0.001)
+            return True
         except TypeError:
             pass
-    return all(values[i] <= values[i + 1] for i in range(len(values) - 1))
+    return all(values[i] <= values[i + 1] for i in range(n - 1))
 
 
 def merge_sorted_chunks(chunks: List[Any]) -> Any:

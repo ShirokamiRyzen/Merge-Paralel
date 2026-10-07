@@ -418,6 +418,7 @@ python main.py
 - **Keadilan vs makespan**: kini dipilih **dynamic work-stealing** (satu antrean bersama) agar node cepat mengerjakan lebih banyak dan node lambat tidak menjadi straggler; ini mengoptimalkan *makespan* (waktu total) ketimbang kontribusi yang identik antar node.
 
 - **Meta UI**: versi CLI memakai `main.py` (menu teks), versi grafis memakai `gui_app.py` (Tkinter). Keduanya berbagi backend yang sama; `gui_app.py` tidak mengubah modul lain selain mem-*patch* `print_progress_bar` saat runtime.
+- **Responsif pada data raksasa (GUI)**: operasi sort/I/O dipecah per-chunk dengan jeda GIL singkat (`time.sleep(0.001)`) di `master.run_serial_sorting` (blok adaptif 500.000), `master.save_to_file`/`load_from_file`, `fastsort.to_int32`, dan `fastsort.is_sorted_values`. Ini mencegah GUI "Not Responding" pada ratusan juta data, sedangkan CLI tak terpengaruh. Pemuatan berkas juga dipindah ke *worker thread* di `gui_app.py`.
 
 ---
 

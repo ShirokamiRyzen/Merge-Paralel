@@ -660,14 +660,18 @@ class MergeSortGUI:
         self._set_controls_enabled(True)
         self._refresh_master_status_once()
 
+    def _has_any_data(self) -> bool:
+        return bool(self.current_data) or os.path.exists(FILE_UNSORTED)
+
     def _ensure_data(self):
+        """Muat data di dalam task-thread (bukan main-thread) agar UI tidak beku."""
         if self.current_data:
             return self.current_data
         loaded = master.load_from_file(FILE_UNSORTED)
         if loaded:
             self.current_data = loaded
             return loaded
-        messagebox.showwarning("Data kosong", "Belum ada data. Silakan lakukan Generate Data terlebih dahulu.")
+        print("[GUI] Belum ada data. Lakukan Generate Data terlebih dahulu.")
         return None
 
     def _ask_n(self, title="Jumlah Data"):
@@ -757,11 +761,14 @@ class MergeSortGUI:
         self._run_task(task)
 
     def master_serial(self):
-        data = self._ensure_data()
-        if data is None:
+        if not self._has_any_data():
+            messagebox.showwarning("Data kosong", "Belum ada data. Silakan lakukan Generate Data terlebih dahulu.")
             return
 
         def task():
+            data = self._ensure_data()
+            if data is None:
+                return
             total, ok, result = master.run_serial_sorting(data, waktu_unsort=self.waktu_unsort)
             self.last_serial_time = total
             self.current_data = result
@@ -775,11 +782,14 @@ class MergeSortGUI:
         if len(self.server.get_active_workers()) == 0:
             messagebox.showwarning("Tanpa Worker", "Belum ada worker terhubung. Jalankan Worker Node terlebih dahulu.")
             return
-        data = self._ensure_data()
-        if data is None:
+        if not self._has_any_data():
+            messagebox.showwarning("Data kosong", "Belum ada data. Silakan lakukan Generate Data terlebih dahulu.")
             return
 
         def task():
+            data = self._ensure_data()
+            if data is None:
+                return
             result = master.run_distributed_sorting(self.server, data, waktu_unsort=self.waktu_unsort)
             if result:
                 total, ok, sorted_data, nodes, threads = result
@@ -943,11 +953,14 @@ class MergeSortGUI:
         self._run_task(task)
 
     def local_serial(self):
-        data = self._ensure_data()
-        if data is None:
+        if not self._has_any_data():
+            messagebox.showwarning("Data kosong", "Belum ada data. Silakan lakukan Generate Data terlebih dahulu.")
             return
 
         def task():
+            data = self._ensure_data()
+            if data is None:
+                return
             total, ok, result = master.run_serial_sorting(data, waktu_unsort=self.waktu_unsort)
             self.last_serial_time = total
             self.current_data = result
@@ -955,8 +968,8 @@ class MergeSortGUI:
         self._run_task(task)
 
     def local_parallel(self):
-        data = self._ensure_data()
-        if data is None:
+        if not self._has_any_data():
+            messagebox.showwarning("Data kosong", "Belum ada data. Silakan lakukan Generate Data terlebih dahulu.")
             return
         max_threads = os.cpu_count() or 1
         n_threads = simpledialog.askinteger(
@@ -966,6 +979,9 @@ class MergeSortGUI:
             return
 
         def task():
+            data = self._ensure_data()
+            if data is None:
+                return
             total, ok, result = master.run_local_parallel_sorting(
                 data, waktu_unsort=self.waktu_unsort, n_threads=n_threads)
             self.current_data = result
