@@ -148,6 +148,7 @@ seluruh alur CLI. Dijalankan dengan `python gui_app.py`.
 | `AnsiConsole(tk.Text)` | Text widget yang memahami kode ANSI (warna/bold), `\r` (overwrite baris, untuk progress) dan `\n`; escape non-warna (mis. `ESC[K`) diabaikan |
 | `QueueWriter(io.TextIOBase)` | Stream `sys.stdout`/`sys.stderr` yang meneruskan teks ke antrean thread-safe agar aman dari thread latar |
 | `gui_print_progress_bar(...)` | Pengganti `print_progress_bar` di `cli_ui`/`master`/`worker`, mengirim event progress ke progress bar GUI |
+| `ColorProgressBar(tk.Canvas)` | Progress bar berwarna berbasis Canvas (track gelap + isi hijau, label teks di tengah, reset "Siap"); menggantikan `ttk.Progressbar` yang kurang jelas warnanya |
 | `GuiWorker` | Worker Node ramah-GUI: konek, `REGISTER`, loop perintah (`SORT`, `GENERATE_UNSORTED`, `SORT_ON_FLY`, `SUMMARY`, `PING`, `SHUTDOWN`), bisa dihentikan (tanpa `input()` blocking) |
 | `MergeSortGUI` | Kelas utama: 3 tab (Master/Worker/Local Parallel), konsol, progress bar, auto-refresh status |
 | `main()` | Entry point: patch `print_progress_bar` lalu `root.mainloop()` |

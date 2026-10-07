@@ -166,6 +166,66 @@ class QueueWriter(io.TextIOBase):
         return "utf-8"
 
 
+class ColorProgressBar(tk.Canvas):
+    """Progress bar berwarna berbasis Canvas (lebih jelas & konsisten dari ttk)."""
+
+    def __init__(self, parent, height: int = 28,
+                 bg: str = "#0d1117", track: str = "#30363d",
+                 fill: str = "#238636", fill_done: str = "#2ea043",
+                 text_color: str = "#ffffff", **kw):
+        super().__init__(parent, height=height, bg=bg, highlightthickness=0, bd=0, **kw)
+        self._height = height
+        self._track = track
+        self._fill = fill
+        self._fill_done = fill_done
+        self._text_color = text_color
+        self._value = 0
+        self._max = 100
+        self._prefix = ""
+        self._suffix = ""
+        self._active = False
+        self.bind("<Configure>", lambda _e: self._redraw())
+
+    def reset(self):
+        self._value = 0
+        self._max = 100
+        self._prefix = ""
+        self._suffix = ""
+        self._active = False
+        self._redraw()
+
+    def set(self, current, total, prefix: str = "", suffix: str = ""):
+        self._active = True
+        self._value = max(0, int(current))
+        self._max = max(1, int(total))
+        self._prefix = prefix or ""
+        self._suffix = suffix or ""
+        self._redraw()
+
+    def _redraw(self):
+        self.delete("all")
+        w = self.winfo_width()
+        h = self._height
+        if w <= 1:
+            return
+        self.create_rectangle(0, 0, w, h, fill=self._track, outline="")
+        pct = 0.0
+        if self._active:
+            pct = max(0.0, min(1.0, self._value / self._max))
+        filled = int(w * pct)
+        if filled > 0:
+            color = self._fill_done if pct >= 1.0 else self._fill
+            self.create_rectangle(0, 0, filled, h, fill=color, outline="")
+        if self._active:
+            label = f"{self._prefix}  {self._value:,} / {self._max:,}  ({pct * 100:5.1f}%)  {self._suffix}"
+        else:
+            label = self._prefix or "Siap"
+        self.create_text(
+            w // 2, h // 2, text=label.strip(), fill=self._text_color,
+            font=(CONSOLE_FONT_FAMILY, max(9, UI_FONT_SIZE - 1), "bold"),
+        )
+
+
 def gui_print_progress_bar(current, total, prefix="", suffix="", length=30, fill="#"):
     if total <= 0:
         total = 1
@@ -349,6 +409,10 @@ class MergeSortGUI:
         self.worker_running = False
         self._scan_snapshot = None
         self._master_snapshot = None
+        self._progress_key = None
+        self._progress_val = -1
+        self._pbar_visible = False
+        self._last_progress_time = 0.0
 
         self.action_buttons = []
         self._build_ui()
@@ -358,6 +422,7 @@ class MergeSortGUI:
 
         self._print_intro()
         self.root.after(40, self._drain_queue)
+        self.root.after(500, self._progress_idle_check)
         self.root.after(1000, self._refresh_master_status)
         self.root.after(900, self._refresh_worker_scan)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -390,7 +455,6 @@ class MergeSortGUI:
         )
         style.configure("TEntry", padding=4)
         style.configure("Treeview", font=("Segoe UI", UI_FONT_SIZE), rowheight=26)
-        style.configure("Horizontal.TProgressbar", thickness=22)
 
     # ------------------------------------------------------------------ UI --
 
@@ -530,15 +594,12 @@ class MergeSortGUI:
         outer.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         pr = ttk.Frame(outer)
-        pr.pack(fill="x", pady=(0, 4))
-        self.pbar = ttk.Progressbar(pr, mode="determinate", maximum=100)
-        self.pbar.pack(fill="x", side="left", expand=True)
-        self.lbl_progress = ttk.Label(pr, text="", width=52, anchor="e")
-        self.lbl_progress.pack(side="right", padx=(8, 0))
+        pr.pack(fill="x")
+        self.pbar = ColorProgressBar(pr, height=28)
 
         text_frame = ttk.Frame(outer)
-        text_frame.pack(fill="both", expand=True)
-        self.console = AnsiConsole(text_frame)
+        text_frame.pack(fill="both", expand=True, pady=(4, 0))
+        self.console = AnsiConsole(text_frame, height=12)
         yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.console.yview)
         xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.console.xview)
         self.console.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
@@ -548,9 +609,11 @@ class MergeSortGUI:
         text_frame.rowconfigure(0, weight=1)
         text_frame.columnconfigure(0, weight=1)
 
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x", pady=(4, 0))
-        ttk.Button(bar, text="Bersihkan Log", command=self.console.clear).pack(side="right")
+        footer = ttk.Frame(outer)
+        footer.pack(fill="x", pady=(6, 0))
+        ttk.Label(footer, text="Konsol output proses", foreground="#6e7681").pack(side="left")
+        self.btn_clear = ttk.Button(footer, text="Clear Console", command=self._clear_console)
+        self.btn_clear.pack(side="right")
 
     def _print_intro(self):
         print("Distributed & Serial Merge Sort - GUI siap digunakan.")
@@ -575,6 +638,9 @@ class MergeSortGUI:
             return
         self.busy = True
         self._set_controls_enabled(False)
+        self._progress_key = None
+        self._progress_val = -1
+        self.pbar.reset()
 
         def wrapper():
             try:
@@ -590,6 +656,7 @@ class MergeSortGUI:
 
     def _task_finished(self):
         self.busy = False
+        self._hide_pbar()
         self._set_controls_enabled(True)
         self._refresh_master_status_once()
 
@@ -614,7 +681,7 @@ class MergeSortGUI:
     def _drain_queue(self):
         processed = 0
         try:
-            while processed < 500:
+            while processed < 2000:
                 item = _OUT_QUEUE.get_nowait()
                 processed += 1
                 if item[0] == "text":
@@ -627,9 +694,34 @@ class MergeSortGUI:
         self.root.after(40, self._drain_queue)
 
     def _update_progress(self, cur, tot, prefix, suffix):
-        self.pbar.config(maximum=tot, value=cur)
-        pct = (cur / tot * 100) if tot else 0
-        self.lbl_progress.config(text=f"{prefix} {cur:,}/{tot:,} ({pct:5.1f}%) {suffix}")
+        key = (prefix, tot)
+        if key == self._progress_key and cur < self._progress_val:
+            return
+        self._progress_key = key
+        self._progress_val = cur
+        self._last_progress_time = time.monotonic()
+        self._show_pbar()
+        self.pbar.set(cur, tot, prefix, suffix)
+
+    def _show_pbar(self):
+        if not self._pbar_visible:
+            self.pbar.pack(fill="x")
+            self._pbar_visible = True
+
+    def _hide_pbar(self):
+        if self._pbar_visible:
+            self.pbar.pack_forget()
+            self._pbar_visible = False
+        self.pbar.reset()
+
+    def _progress_idle_check(self):
+        if (self._pbar_visible and not self.busy
+                and (time.monotonic() - self._last_progress_time) > 1.5):
+            self._hide_pbar()
+        self.root.after(500, self._progress_idle_check)
+
+    def _clear_console(self):
+        self.console.clear()
 
     # ---------------------------------------------------------- Master tab --
 
