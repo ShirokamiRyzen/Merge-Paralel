@@ -53,6 +53,7 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 | `network_utils.py` | Framing TCP (pickle + zstd/zlib), progress callback, UDP discovery |
 | `fastsort.py` | Akselerasi NumPy: sort vektor, packing `int32`, validasi & merge |
 | `cli_ui.py` | Warna ANSI, box, header, tabel, progress bar (aman Windows/Linux) |
+| `requirements.txt` | Daftar dependensi eksternal (`numpy`, `zstandard`) |
 
 ### 3.1 `master.py` — Fungsi & Kelas Kunci
 
@@ -104,6 +105,34 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 
 `print_progress_bar` memakai `\r` + ANSI `ESC[K` untuk menghapus sisa baris lama
 (mencegah tampilan "nyampah" saat suffix berubah panjang).
+
+### 3.5 Dependensi & Library
+
+**Library eksternal (opsional, disarankan)** - didefinisikan di `requirements.txt`:
+
+| Library | Versi | Fungsi |
+| ------- | ----- | ------ |
+| `numpy` | `>=2.0` | Sorting vektor native, packing `int32`, validasi urutan, dan K-Way merge (melepas GIL) |
+| `zstandard` | `>=0.22` | Kompresi payload TCP cepat (zstd level 1) untuk menekan bottleneck Wireless/LAN |
+
+Jika paket di atas tidak terpasang, sistem tetap berjalan dengan **fallback ke *standard library*** (`list.sort`, `zlib`) - hanya lebih lambat.
+
+**Modul *standard library* Python yang dipakai** (tanpa install tambahan):
+
+| Modul | Kegunaan |
+| ----- | -------- |
+| `socket`, `struct` | Framing TCP & UDP auto-discovery |
+| `pickle` | Serialisasi objek paket |
+| `zlib` | Kompresi fallback bila `zstandard` tidak tersedia |
+| `threading`, `queue`, `concurrent.futures` | Eksekusi simultan, antrean tugas (work-stealing), pembangkitan data terdistribusi |
+| `heapq`, `random`, `time`, `os`, `sys` | Merge/utility, RNG & seed, pengukuran waktu, I/O |
+| `argparse`, `select`, `msvcrt`, `json` | CLI Worker, input non-blocking, beacon UDP |
+
+Memasang dependensi eksternal:
+
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
