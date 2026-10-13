@@ -222,7 +222,7 @@ class ColorProgressBar(tk.Canvas):
             label = self._prefix or "Siap"
         self.create_text(
             w // 2, h // 2, text=label.strip(), fill=self._text_color,
-            font=(CONSOLE_FONT_FAMILY, max(9, UI_FONT_SIZE - 1), "bold"),
+            font=(CONSOLE_FONT_FAMILY, max(11, UI_FONT_SIZE), "bold"),
         )
 
 
@@ -459,23 +459,26 @@ class MergeSortGUI:
     # ------------------------------------------------------------------ UI --
 
     def _build_ui(self):
-        header = tk.Frame(self.root, bg="#1f6feb", height=56)
+        header = tk.Frame(self.root, bg="#1f6feb", height=46)
         header.pack(fill="x")
         tk.Label(
             header, text="  SISTEM DISTRIBUTED & SERIAL MERGE SORT",
-            bg="#1f6feb", fg="white", font=("Segoe UI", 17, "bold"),
-        ).pack(side="left", padx=12, pady=10)
+            bg="#1f6feb", fg="white", font=("Segoe UI", 15, "bold"),
+        ).pack(side="left", padx=12, pady=6)
         tk.Label(
             header, text="Socket Programming TCP/IP  |  Tkinter GUI  ",
-            bg="#1f6feb", fg="#cfe1ff", font=("Segoe UI", 11),
+            bg="#1f6feb", fg="#cfe1ff", font=("Segoe UI", 10),
         ).pack(side="right", padx=12)
 
-        self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=8, pady=6)
+        self.paned = ttk.PanedWindow(self.root, orient="vertical")
+        self.paned.pack(fill="both", expand=True, padx=8, pady=(4, 6))
 
-        self.tab_master = ttk.Frame(self.nb, padding=10)
-        self.tab_worker = ttk.Frame(self.nb, padding=10)
-        self.tab_local = ttk.Frame(self.nb, padding=10)
+        self.nb = ttk.Notebook(self.paned)
+        self.paned.add(self.nb, weight=1)
+
+        self.tab_master = ttk.Frame(self.nb, padding=6)
+        self.tab_worker = ttk.Frame(self.nb, padding=6)
+        self.tab_local = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.tab_master, text="  Master Node  ")
         self.nb.add(self.tab_worker, text="  Worker Node  ")
         self.nb.add(self.tab_local, text="  Local Parallel  ")
@@ -486,7 +489,7 @@ class MergeSortGUI:
         self._build_console()
 
     def _build_master_tab(self):
-        info = ttk.LabelFrame(self.tab_master, text="Status Master", padding=10)
+        info = ttk.LabelFrame(self.tab_master, text="Status Master", padding=6)
         info.pack(fill="x")
 
         self.lbl_master_ip = ttk.Label(info, text="-")
@@ -495,20 +498,27 @@ class MergeSortGUI:
         self.lbl_sorted = ttk.Label(info, text="-")
         self.lbl_preview = ttk.Label(info, text="-", wraplength=980, justify="left")
 
-        rows = [
-            ("Alamat IP Master", self.lbl_master_ip),
-            ("Worker Terhubung", self.lbl_workers),
-            ("unsorted.txt", self.lbl_unsorted),
-            ("sorted.txt", self.lbl_sorted),
-            ("Pratinjau Data", self.lbl_preview),
-        ]
-        for i, (label, widget) in enumerate(rows):
-            ttk.Label(info, text=f"{label} :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
-                row=i, column=0, sticky="nw", padx=(0, 8), pady=2)
-            widget.grid(row=i, column=1, sticky="w", pady=2)
+        # Layout 2 kolom hemat ruang vertikal
+        ttk.Label(info, text="Alamat IP Master :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(0, 6), pady=1)
+        self.lbl_master_ip.grid(row=0, column=1, sticky="w", padx=(0, 20), pady=1)
+        ttk.Label(info, text="Worker Terhubung :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+            row=0, column=2, sticky="w", padx=(0, 6), pady=1)
+        self.lbl_workers.grid(row=0, column=3, sticky="w", pady=1)
 
-        ctrl = ttk.LabelFrame(self.tab_master, text="Kontrol Master", padding=10)
-        ctrl.pack(fill="x", pady=(10, 0))
+        ttk.Label(info, text="unsorted.txt :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+            row=1, column=0, sticky="w", padx=(0, 6), pady=1)
+        self.lbl_unsorted.grid(row=1, column=1, sticky="w", padx=(0, 20), pady=1)
+        ttk.Label(info, text="sorted.txt :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+            row=1, column=2, sticky="w", padx=(0, 6), pady=1)
+        self.lbl_sorted.grid(row=1, column=3, sticky="w", pady=1)
+
+        ttk.Label(info, text="Pratinjau Data :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+            row=2, column=0, sticky="nw", padx=(0, 6), pady=1)
+        self.lbl_preview.grid(row=2, column=1, columnspan=3, sticky="w", pady=1)
+
+        ctrl = ttk.LabelFrame(self.tab_master, text="Kontrol Master", padding=6)
+        ctrl.pack(fill="x", pady=(6, 0))
 
         self.btn_server = ttk.Button(ctrl, text="Mulai Server Master", command=self.toggle_master_server)
         self.btn_gen = ttk.Button(ctrl, text="Generate Data", command=self.master_generate)
@@ -516,56 +526,56 @@ class MergeSortGUI:
         self.btn_dist = ttk.Button(ctrl, text="Distributed Sorting", command=self.master_distributed)
         self.btn_del = ttk.Button(ctrl, text="Hapus File .txt", command=self.delete_files)
 
-        self.btn_server.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
-        self.btn_gen.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
-        self.btn_serial.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
-        self.btn_dist.grid(row=0, column=3, padx=4, pady=4, sticky="ew")
-        self.btn_del.grid(row=0, column=4, padx=4, pady=4, sticky="ew")
+        self.btn_server.grid(row=0, column=0, padx=4, pady=3, sticky="ew")
+        self.btn_gen.grid(row=0, column=1, padx=4, pady=3, sticky="ew")
+        self.btn_serial.grid(row=0, column=2, padx=4, pady=3, sticky="ew")
+        self.btn_dist.grid(row=0, column=3, padx=4, pady=3, sticky="ew")
+        self.btn_del.grid(row=0, column=4, padx=4, pady=3, sticky="ew")
         for c in range(5):
             ctrl.columnconfigure(c, weight=1)
 
         self.action_buttons.extend([self.btn_gen, self.btn_serial, self.btn_dist, self.btn_del])
 
-        wl = ttk.LabelFrame(self.tab_master, text="Daftar Worker Aktif", padding=8)
-        wl.pack(fill="both", expand=True, pady=(10, 0))
-        self.worker_listbox = tk.Listbox(wl, height=6, font=(CONSOLE_FONT_FAMILY, UI_FONT_SIZE), activestyle="none")
-        self.worker_listbox.pack(fill="both", expand=True)
+        wl = ttk.LabelFrame(self.tab_master, text="Daftar Worker Aktif", padding=4)
+        wl.pack(fill="x", pady=(6, 0))
+        self.worker_listbox = tk.Listbox(wl, height=2, font=(CONSOLE_FONT_FAMILY, UI_FONT_SIZE), activestyle="none")
+        self.worker_listbox.pack(fill="x")
 
     def _build_worker_tab(self):
-        top = ttk.LabelFrame(self.tab_worker, text="Koneksi ke Master", padding=10)
+        top = ttk.LabelFrame(self.tab_worker, text="Koneksi ke Master", padding=6)
         top.pack(fill="x")
 
-        ttk.Label(top, text="IP Master:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(top, text="IP Master:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         self.ent_host = ttk.Entry(top, width=20)
-        self.ent_host.grid(row=0, column=1, sticky="w", padx=4, pady=4)
-        ttk.Label(top, text="Port:").grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self.ent_host.grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(top, text="Port:").grid(row=0, column=2, sticky="w", padx=4, pady=2)
         self.ent_port = ttk.Entry(top, width=8)
         self.ent_port.insert(0, str(DEFAULT_MASTER_PORT))
-        self.ent_port.grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        self.ent_port.grid(row=0, column=3, sticky="w", padx=4, pady=2)
 
         self.btn_scan = ttk.Button(top, text="Mulai Auto-Scan", command=self.toggle_scan)
-        self.btn_scan.grid(row=0, column=4, sticky="ew", padx=4, pady=4)
+        self.btn_scan.grid(row=0, column=4, sticky="ew", padx=4, pady=2)
         self.btn_worker_connect = ttk.Button(top, text="Hubungkan Manual", command=self.connect_worker_manual)
-        self.btn_worker_connect.grid(row=0, column=5, sticky="ew", padx=4, pady=4)
+        self.btn_worker_connect.grid(row=0, column=5, sticky="ew", padx=4, pady=2)
         self.btn_worker_disconnect = ttk.Button(top, text="Putuskan", command=self.disconnect_worker, state="disabled")
-        self.btn_worker_disconnect.grid(row=0, column=6, sticky="ew", padx=4, pady=4)
+        self.btn_worker_disconnect.grid(row=0, column=6, sticky="ew", padx=4, pady=2)
         for c in range(7):
             top.columnconfigure(c, weight=1)
 
         self.lbl_worker_status = ttk.Label(
             top, text="Status: TERPUTUS", font=("Segoe UI", UI_FONT_SIZE + 1, "bold"), foreground="#c0392b")
-        self.lbl_worker_status.grid(row=1, column=0, columnspan=7, sticky="w", padx=4, pady=(8, 0))
+        self.lbl_worker_status.grid(row=1, column=0, columnspan=7, sticky="w", padx=4, pady=(4, 0))
 
-        scan = ttk.LabelFrame(self.tab_worker, text="Master Terdeteksi (Auto-Discovery UDP)", padding=8)
-        scan.pack(fill="both", expand=True, pady=(10, 0))
-        self.master_listbox = tk.Listbox(scan, height=7, font=(CONSOLE_FONT_FAMILY, UI_FONT_SIZE), activestyle="none")
-        self.master_listbox.pack(fill="both", expand=True)
+        scan = ttk.LabelFrame(self.tab_worker, text="Master Terdeteksi (Auto-Discovery UDP)", padding=4)
+        scan.pack(fill="x", pady=(6, 0))
+        self.master_listbox = tk.Listbox(scan, height=3, font=(CONSOLE_FONT_FAMILY, UI_FONT_SIZE), activestyle="none")
+        self.master_listbox.pack(fill="x")
         self.btn_connect_selected = ttk.Button(scan, text="Hubungkan ke Master Terpilih", command=self.connect_worker_selected)
-        self.btn_connect_selected.pack(fill="x", pady=(8, 0))
+        self.btn_connect_selected.pack(fill="x", pady=(4, 0))
         self.action_buttons.append(self.btn_connect_selected)
 
     def _build_local_tab(self):
-        info = ttk.LabelFrame(self.tab_local, text="Local Parallel (1 Komputer, Tanpa Jaringan)", padding=10)
+        info = ttk.LabelFrame(self.tab_local, text="Local Parallel (1 Komputer, Tanpa Jaringan)", padding=6)
         info.pack(fill="x")
         threads = os.cpu_count() or 1
         ttk.Label(info, text=f"CPU Lokal Terdeteksi : {threads} thread", font=("Segoe UI", UI_FONT_SIZE, "bold")).pack(anchor="w")
@@ -574,32 +584,34 @@ class MergeSortGUI:
         self.lbl_local_unsorted = ttk.Label(info, text="unsorted.txt : -")
         self.lbl_local_sorted = ttk.Label(info, text="sorted.txt : -")
         self.lbl_local_preview = ttk.Label(info, text="Pratinjau : -", wraplength=980, justify="left")
-        self.lbl_local_unsorted.pack(anchor="w", pady=(6, 0))
+        self.lbl_local_unsorted.pack(anchor="w", pady=(2, 0))
         self.lbl_local_sorted.pack(anchor="w")
         self.lbl_local_preview.pack(anchor="w")
 
-        ctrl = ttk.LabelFrame(self.tab_local, text="Kontrol Local Parallel", padding=10)
-        ctrl.pack(fill="x", pady=(10, 0))
+        ctrl = ttk.LabelFrame(self.tab_local, text="Kontrol Local Parallel", padding=6)
+        ctrl.pack(fill="x", pady=(6, 0))
         self.btn_l_gen = ttk.Button(ctrl, text="Generate Data", command=self.local_generate)
         self.btn_l_serial = ttk.Button(ctrl, text="Serial Sorting (Baseline)", command=self.local_serial)
         self.btn_l_par = ttk.Button(ctrl, text="Local Parallel Sorting", command=self.local_parallel)
         self.btn_l_del = ttk.Button(ctrl, text="Hapus File .txt", command=self.delete_files)
         for i, b in enumerate([self.btn_l_gen, self.btn_l_serial, self.btn_l_par, self.btn_l_del]):
-            b.grid(row=0, column=i, padx=4, pady=4, sticky="ew")
+            b.grid(row=0, column=i, padx=4, pady=3, sticky="ew")
             ctrl.columnconfigure(i, weight=1)
         self.action_buttons.extend([self.btn_l_gen, self.btn_l_serial, self.btn_l_par, self.btn_l_del])
 
     def _build_console(self):
-        outer = ttk.LabelFrame(self.root, text="Konsol & Progres", padding=6)
-        outer.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        outer = ttk.LabelFrame(self.paned, text="Konsol & Progres", padding=6)
+        self.paned.add(outer, weight=3)
 
         pr = ttk.Frame(outer)
-        pr.pack(fill="x")
-        self.pbar = ColorProgressBar(pr, height=28)
+        pr.pack(fill="x", pady=(0, 4))
+        self.pbar = ColorProgressBar(pr, height=36)
+        self.pbar.pack(fill="x")
+        self._pbar_visible = True
 
         text_frame = ttk.Frame(outer)
-        text_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.console = AnsiConsole(text_frame, height=12)
+        text_frame.pack(fill="both", expand=True, pady=(2, 0))
+        self.console = AnsiConsole(text_frame, height=22)
         yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.console.yview)
         xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.console.xview)
         self.console.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
@@ -610,7 +622,7 @@ class MergeSortGUI:
         text_frame.columnconfigure(0, weight=1)
 
         footer = ttk.Frame(outer)
-        footer.pack(fill="x", pady=(6, 0))
+        footer.pack(fill="x", pady=(4, 0))
         ttk.Label(footer, text="Konsol output proses", foreground="#6e7681").pack(side="left")
         self.btn_clear = ttk.Button(footer, text="Clear Console", command=self._clear_console)
         self.btn_clear.pack(side="right")
@@ -713,14 +725,11 @@ class MergeSortGUI:
             self._pbar_visible = True
 
     def _hide_pbar(self):
-        if self._pbar_visible:
-            self.pbar.pack_forget()
-            self._pbar_visible = False
+        # Progress bar tetap tampil rapi dengan status 'Siap'
         self.pbar.reset()
 
     def _progress_idle_check(self):
-        if (self._pbar_visible and not self.busy
-                and (time.monotonic() - self._last_progress_time) > 1.5):
+        if not self.busy and (time.monotonic() - self._last_progress_time) > 1.5:
             self._hide_pbar()
         self.root.after(500, self._progress_idle_check)
 
