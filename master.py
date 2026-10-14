@@ -6,7 +6,7 @@ Master Node (Server) untuk Sistem Distributed Merge Sort.
 - Membangkitkan N data integer acak positif dan menyimpannya ke unsorted.txt (dengan progress bar).
 - Mode Serial Sorting vs Distributed Sorting (K-Way Merge dengan heapq.merge).
 - Dilengkapi PROGRESS BAR di seluruh proses komputasi serial & paralel.
-- Menyimpan hasil data terurut ke sorted.txt.
+- Menyimpan hasil data terurut ke sorted.csv.
 - Menghitung metrik performa: Waktu, Speedup, Efisiensi, dan Validasi data.
 """
 
@@ -35,7 +35,7 @@ from cli_ui import (
 DEFAULT_PORT = 5000
 DEFAULT_DATA_SIZE = 1_000_000
 FILE_UNSORTED = "unsorted.txt"
-FILE_SORTED = "sorted.txt"
+FILE_SORTED = "sorted.csv"
 
 
 def parallel_sort_data(arr: List[int], n_threads: Optional[int] = None) -> List[int]:
@@ -104,7 +104,7 @@ def load_from_file(filename: str) -> Optional[List[int]]:
 
 
 def delete_txt_files(file_unsorted: str = FILE_UNSORTED, file_sorted: str = FILE_SORTED) -> Tuple[bool, str]:
-    """Menghapus berkas unsorted.txt dan sorted.txt jika ada."""
+    """Menghapus berkas unsorted.txt dan sorted.csv jika ada."""
     deleted = []
     for fname in [file_unsorted, file_sorted]:
         if os.path.exists(fname):
@@ -116,7 +116,7 @@ def delete_txt_files(file_unsorted: str = FILE_UNSORTED, file_sorted: str = FILE
     if deleted:
         names_str = ", ".join(f"'{f}'" for f in deleted)
         return True, f"Berkas {names_str} berhasil dihapus!"
-    return True, "Tidak ada berkas 'unsorted.txt' atau 'sorted.txt' yang ditemukan."
+    return True, "Tidak ada berkas 'unsorted.txt' atau 'sorted.csv' yang ditemukan."
 
 
 def generate_random_data(n: int, server: Optional[Any] = None) -> Tuple[List[int], float]:
@@ -385,7 +385,7 @@ class MasterServer:
 def run_serial_sorting(data: List[int], waktu_unsort: Optional[float] = None) -> Tuple[float, bool, List[int]]:
     """
     Mode Serial: Mengurutkan data langsung di CPU master dengan PROGRESS BAR bertahap.
-    Total waktu dan ringkasan ditampilkan di akhir proses (setelah simpan ke sorted.txt).
+    Total waktu dan ringkasan ditampilkan di akhir proses (setelah simpan ke sorted.csv).
     """
     print_header("KOMPUTASI SERIAL SORTING", f"Memproses {len(data):,} Elemen di Master")
     print(f" {Colors.CYAN}•{Colors.RESET} Jumlah Data     : {Colors.BOLD}{len(data):,} elemen{Colors.RESET}")
@@ -443,13 +443,13 @@ def run_serial_sorting(data: List[int], waktu_unsort: Optional[float] = None) ->
     else:
         print_error("Validasi Urutan : GAGAL (Data Tidak Terurut)")
 
-    # 4. Simpan ke sorted.txt dengan Progress Bar
+    # 4. Simpan ke sorted.csv dengan Progress Bar
     t_save_start = time.perf_counter()
     save_to_file(sorted_data, FILE_SORTED)
     t_save_end = time.perf_counter()
     save_time = t_save_end - t_save_start
 
-    print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+    print_progress_bar(1, 1, prefix="Simpan sorted.csv", suffix="Selesai (100%)")
     print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
 
     t_overall_end = time.perf_counter()
@@ -602,7 +602,7 @@ def run_distributed_sorting_on_fly(server: MasterServer, n_total: int = DEFAULT_
     - Setiap komputer (Master & seluruh Worker) membangkitkan dan mengurutkan porsi datanya
       secara langsung di RAM lokal secara simultan.
     - Master hanya menerima aliran data terurut dari worker dan menggabungkannya (K-Way Merge) secara linear.
-    - Total waktu ditampilkan di akhir proses (setelah selesai simpan ke sorted.txt).
+    - Total waktu ditampilkan di akhir proses (setelah selesai simpan ke sorted.csv).
     """
     active_workers = server.get_live_workers()
     k_workers = len(active_workers)
@@ -747,12 +747,12 @@ def run_distributed_sorting_on_fly(server: MasterServer, n_total: int = DEFAULT_
         else:
             print_error("Validasi Urutan     : GAGAL (Data Rusak/Tidak Terurut)")
 
-        # Simpan ke sorted.txt
+        # Simpan ke sorted.csv
         t_save_start = time.perf_counter()
         save_to_file(final_sorted_data, FILE_SORTED)
         t_save_end = time.perf_counter()
         save_time = t_save_end - t_save_start
-        print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+        print_progress_bar(1, 1, prefix="Simpan sorted.csv", suffix="Selesai (100%)")
         print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
 
         t_dist_total_end = time.perf_counter()
@@ -1103,12 +1103,12 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
         else:
             print_error("Validasi Urutan     : GAGAL (Data Rusak/Tidak Terurut)")
 
-        # 6. Simpan ke sorted.txt
+        # 6. Simpan ke sorted.csv
         t_save_start = time.perf_counter()
         save_to_file(final_sorted_data, FILE_SORTED)
         t_save_end = time.perf_counter()
         save_time = t_save_end - t_save_start
-        print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+        print_progress_bar(1, 1, prefix="Simpan sorted.csv", suffix="Selesai (100%)")
         print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
 
         t_dist_total_end = time.perf_counter()
@@ -1247,12 +1247,12 @@ def run_local_parallel_sorting(data: List[int], waktu_unsort: Optional[float] = 
     else:
         print_error("Validasi Urutan : GAGAL (Data Rusak/Tidak Terurut)")
 
-    # Simpan ke sorted.txt
+    # Simpan ke sorted.csv
     t_save_start = time.perf_counter()
     save_to_file(final_sorted_data, FILE_SORTED)
     t_save_end = time.perf_counter()
     save_time = t_save_end - t_save_start
-    print_progress_bar(1, 1, prefix="Simpan sorted.txt", suffix="Selesai (100%)")
+    print_progress_bar(1, 1, prefix="Simpan sorted.csv", suffix="Selesai (100%)")
     print_success(f"Hasil terurut berhasil disimpan ke '{FILE_SORTED}'!")
 
     t_overall_end = time.perf_counter()
@@ -1343,12 +1343,12 @@ def run_local_parallel_cli():
         print(box_line(f"CPU Lokal Terdeteksi : {Colors.BOLD}{Colors.BRIGHT_GREEN}{max_threads} Thread{Colors.RESET}"))
         print(box_line(f"Koneksi Jaringan : {Colors.BRIGHT_GREEN}TIDAK DIPERLUKAN (Offline){Colors.RESET}"))
         print(box_line(f"File unsorted.txt : {unsorted_status}"))
-        print(box_line(f"File sorted.txt : {sorted_status}"))
+        print(box_line(f"File sorted.csv : {sorted_status}"))
         print(box_line(f"Pratinjau Data : {preview_str}"))
         print(box_border())
         print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}Jalankan Local Parallel Sorting{Colors.RESET} (Semua Thread CPU)"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}Jalankan Serial Sorting{Colors.RESET} (Baseline 1 CPU)"))
-        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File Data{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
         print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Kembali ke Menu Utama"))
         print(box_border())
         print(f" {Colors.DIM}Mode ini hanya butuh 1 komputer: seluruh core CPU dipakai, tanpa Wi-Fi/LAN.{Colors.RESET}")
@@ -1496,12 +1496,12 @@ def run_master_cli(port: int = DEFAULT_PORT):
         print(box_line(f"Auto-Discovery    : {Colors.BRIGHT_GREEN}AKTIF (UDP 5002 - Beacon & Subnet Sweep){Colors.RESET}"))
         print(box_line(f"Worker Terhubung  : {Colors.BOLD}{Colors.BRIGHT_GREEN if workers else Colors.BRIGHT_WHITE}{worker_text}{Colors.RESET}"))
         print(box_line(f"File unsorted.txt : {unsorted_status}"))
-        print(box_line(f"File sorted.txt   : {sorted_status}"))
+        print(box_line(f"File sorted.csv   : {sorted_status}"))
         print(box_line(f"Pratinjau Data    : {preview_str}"))
         print(box_border())
         print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}Jalankan Serial Sorting{Colors.RESET} (Simpan ke {FILE_SORTED})"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}Jalankan Distributed Sorting{Colors.RESET} (Pipelined Stream)"))
-        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}Hapus File Data{Colors.RESET} ({FILE_UNSORTED} & {FILE_SORTED})"))
         print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar / Matikan Master"))
         print(box_border())
         print(f" {Colors.DIM}💡 Tips HP Hotspot: Di Worker, Anda bisa langsung ketik IP Master di atas lalu [Enter]{Colors.RESET}")

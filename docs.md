@@ -64,7 +64,7 @@ Tujuan: membandingkan **waktu serial** vs **waktu terdistribusi**, lalu menghitu
 | `parallel_sort_data(arr, n_threads)` | Sort vektor via `fastsort.sort_values` (NumPy `np.sort`, fallback `list.sort`) — bebas GIL dan jauh lebih cepat dari thread Python |
 | `is_sorted(arr)` | Validasi urutan non-decreasing secara vektor (`fastsort.is_sorted_values`) |
 | `format_data_preview(arr, max_items)` | Pratinjau angka untuk UI |
-| `save_to_file` / `load_from_file` | Baca/tulis `unsorted.txt` & `sorted.txt` (satu angka per baris) |
+| `save_to_file` / `load_from_file` | Baca/tulis `unsorted.txt` & `sorted.csv` (satu angka per baris) |
 | `delete_txt_files` | Hapus kedua berkas data |
 | `generate_random_data(n, server)` | Bangkitkan $N$ angka acak (terdistribusi bila ada Worker), simpan ke `unsorted.txt` |
 | `MasterServer` | TCP server: `start_server`, `get_live_workers`, `remove_dead_worker`, `shutdown` |
@@ -307,7 +307,7 @@ lambat **tidak lagi menjadi straggler** yang menahan seluruh kluster (mengatasi 
 hasil_chunks = seluruh chunk terurut dari semua node
 final = fastsort.merge_sorted_chunks(hasil_chunks) # concatenate + np.sort (vektor)
 validasi: len(final) == n_total dan is_sorted(final)
-simpan  : sorted.txt
+simpan  : sorted.csv
 ```
 
 **6) Ringkasan**: dihitung lalu dicetak di Master **dan** dikirim ke Worker via `SUMMARY`.
@@ -335,7 +335,7 @@ Master CLI [2]
 │ ├─ Master local thread ──► parallel_sort_data (NumPy) ──► results[]
 │ └─ Worker dispatcher ──► TCP SORT (int32+zstd) ──► Worker sort ──► TCP hasil ──► results[]
    ├─ Beacon.resume()
-   ├─ K-Way Merge + validasi + simpan sorted.txt
+   ├─ K-Way Merge + validasi + simpan sorted.csv
    ├─ Cetak ringkasan  ──► broadcast_summary() ──► Worker menampilkan ringkasan + [Enter]
    └─ print_comparison_metrics (Speedup/Efisiensi)
 ```
@@ -404,7 +404,7 @@ python main.py
 | Worker error saat menerima data | Master berhenti / koneksi terputus | Pastikan Master tetap berjalan; Worker kembali ke auto-scan |
 | Output terminal "nyampah" | Progress bar lama | Sudah ditangani: throttle + `ESC[K` + gate transfer < 8 MB |
 | Distribusi tidak seimbang | Kapasitas thread berbeda | Normal: alokasi proporsional terhadap jumlah thread tiap node |
-| `sorted.txt` tidak sesuai harapan | Data/bekas uji | Hapus via menu `[3]` lalu jalankan ulang |
+| `sorted.csv` tidak sesuai harapan | Data/bekas uji | Hapus via menu `[3]` lalu jalankan ulang |
 
 ---
 
@@ -454,7 +454,7 @@ Hasil: `dist\MergeSortGUI.exe`. Untuk startup lebih cepat, ganti `--onefile` men
 Catatan:
 
 - `numpy` & `zstandard` otomatis dibundel bila terpasang, sehingga `.exe` memakai jalur cepat.
-- Berkas data (`unsorted.txt`, `sorted.txt`) dibuat di *working directory* tempat `.exe` dijalankan — letakkan `.exe` di folder proyek agar datanya konsisten.
+- Berkas data (`unsorted.txt`, `sorted.csv`) dibuat di *working directory* tempat `.exe` dijalankan — letakkan `.exe` di folder proyek agar datanya konsisten.
 - Mode `--onefile` menjalankan 2 proses (bootloader + aplikasi); ini normal.
 - Artefak `build/`, `dist/`, dan `*.spec` sudah dikecualikan lewat `.gitignore`.
 

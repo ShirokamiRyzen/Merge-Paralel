@@ -32,7 +32,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 1. **Pilih Sumber Data**: gunakan `unsorted.txt` yang ada, atau bangkitkan data baru berukuran $N$.
 2. **Pembangkitan Unsorted** (opsional, terdistribusi bila ada Worker) disertai progress bar dan pencatatan `waktu_unsort`.
 3. **Konfirmasi** lanjut ke pengurutan: `[Y/n]`.
-4. **Pengurutan + Validasi** (*perfect non-decreasing order*) + simpan ke `sorted.txt`.
+4. **Pengurutan + Validasi** (*perfect non-decreasing order*) + simpan ke `sorted.csv`.
 5. **Ringkasan Waktu** di akhir proses (ditampilkan juga di sisi Worker).
 
 ### 1.4 Pemisahan Mode Serial, Local Parallel, dan Distributed
@@ -43,7 +43,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 
 ### 1.5 Manajemen Berkas
 
-- Menu **Hapus File .txt** untuk menghapus `unsorted.txt` & `sorted.txt`, tersedia di `main.py` dan panel Master.
+- Menu **Hapus File Data** untuk menghapus `unsorted.txt` & `sorted.csv`, tersedia di `main.py` dan panel Master.
 
 ---
 
@@ -59,11 +59,16 @@ Merge-Paralel/
 ├── fastsort.py # Akselerasi NumPy: sort vektor, packing int32, validasi & merge
 ├── cli_ui.py # Antarmuka ANSI (box, warna, progress bar)
 ├── requirements.txt # Dependensi opsional (numpy, zstandard)
+├── build.bat # Skrip build .exe sekali-klik (Windows)
 ├── unsorted.txt # Data mentah sebelum diurutkan (otomatis dibuat)
-├── sorted.txt # Hasil akhir terurut (otomatis dibuat)
+├── sorted.csv # Hasil akhir terurut — format CSV satu kolom (otomatis dibuat)
 ├── README.md # Dokumentasi singkat (berkas ini)
 └── docs.md # Dokumentasi teknis lengkap
 ```
+
+> **Format keluaran CSV**: hasil pengurutan disimpan ke **`sorted.csv`** — satu angka per baris
+> (CSV satu kolom), sehingga dapat langsung dibuka di Excel/Google Sheets. Berkas masukan
+> mentah (`unsorted.txt`) tetap berformat teks satu angka per baris.
 
 > 📖 Dokumentasi teknis mendalam (arsitektur, protokol, algoritma, troubleshooting) ada di **[docs.md](docs.md)**.
 
@@ -90,9 +95,14 @@ Dilengkapi konsol berwarna (mendukung kode ANSI) dan progress bar real-time. Ver
 
 ### Versi .EXE (Windows)
 
-Sudah tersedia hasil build siap pakai: **`dist/MergeSortGUI.exe`** — cukup klik dua kali, tanpa perlu instal Python. Letakkan `.exe` di folder proyek bila ingin memakai berkas `unsorted.txt`/`sorted.txt` yang sama (berkas data dibuat di folder tempat `.exe` dijalankan).
+Sudah tersedia hasil build siap pakai: **`dist/MergeSortGUI.exe`** — cukup klik dua kali, tanpa perlu instal Python. Letakkan `.exe` di folder proyek bila ingin memakai berkas `unsorted.txt`/`sorted.csv` yang sama (berkas data dibuat di folder tempat `.exe` dijalankan).
 
 **Build ulang `.exe` (setelah mengubah kode):**
+
+Cara termudah — cukup **klik dua kali `build.bat`** (Windows). Skrip otomatis:
+mencari Python, memasang PyInstaller & dependensi (bila perlu), lalu membangun `dist\MergeSortGUI.exe`.
+
+Atau manual lewat terminal:
 
 ```bash
 # 1. Pasang PyInstaller (sekali saja)
@@ -129,12 +139,12 @@ Pilih **[1] MASTER NODE (Server)**. Panel Master tampil:
 | Auto-Discovery   : AKTIF (UDP 5002 - Beacon & Subnet Sweep)           |
 | Worker Terhubung : 1 node (Worker-1 (DESKTOP-L5EMIAD))                 |
 | File unsorted.txt: ADA (10,000,000 data)                              |
-| File sorted.txt  : Belum ada                                           |
+| File sorted.csv  : Belum ada                                           |
 | Pratinjau Data   : [1, 3, 7, ... (10,000,000 angka) ..., 9999998]      |
 +------------------------------------------------------------------------+
-| [1] Jalankan Serial Sorting (Simpan ke sorted.txt)                     |
+| [1] Jalankan Serial Sorting (Simpan ke sorted.csv)                     |
 | [2] Jalankan Distributed Sorting (Pipelined Stream) |
-| [3] Hapus File .txt (unsorted.txt & sorted.txt)                       |
+| [3] Hapus File Data (unsorted.txt & sorted.csv)                       |
 | [0] Keluar / Matikan Master                                            |
 +------------------------------------------------------------------------+
 ```
@@ -206,7 +216,7 @@ METRIK EVALUASI: WAKTU KOMPUTASI SERIAL VS PARALEL
 ```
 
 > Semua ringkasan waktu kini memakai **waktu komputasi (sorting + merge)** saja —
-> pembangkitan data dan penulisan berkas (`sorted.txt`) **tidak** dihitung, agar
+> pembangkitan data dan penulisan berkas (`sorted.csv`) **tidak** dihitung, agar
 > perbandingan serial vs paralel adil dan skalabilitas paralel terlihat.
 
 ---
@@ -277,7 +287,7 @@ Daftar **seluruh algoritma** yang dipakai aplikasi, lokasi implementasinya, dan 
 
 ## 🧮 6. Metrik Evaluasi
 
-Metrik memakai **waktu komputasi** (sorting + merge) — pembangkitan data dan penulisan `sorted.txt` **tidak** dihitung, agar perbandingan serial vs paralel adil.
+Metrik memakai **waktu komputasi** (sorting + merge) — pembangkitan data dan penulisan `sorted.csv` **tidak** dihitung, agar perbandingan serial vs paralel adil.
 
 | Metrik | Rumus |
 | ------ | ----- |

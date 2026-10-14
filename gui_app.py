@@ -509,7 +509,7 @@ class MergeSortGUI:
         ttk.Label(info, text="unsorted.txt :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
             row=1, column=0, sticky="w", padx=(0, 6), pady=1)
         self.lbl_unsorted.grid(row=1, column=1, sticky="w", padx=(0, 20), pady=1)
-        ttk.Label(info, text="sorted.txt :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
+        ttk.Label(info, text="sorted.csv :", font=("Segoe UI", UI_FONT_SIZE, "bold")).grid(
             row=1, column=2, sticky="w", padx=(0, 6), pady=1)
         self.lbl_sorted.grid(row=1, column=3, sticky="w", pady=1)
 
@@ -524,7 +524,7 @@ class MergeSortGUI:
         self.btn_gen = ttk.Button(ctrl, text="Generate Data", command=self.master_generate)
         self.btn_serial = ttk.Button(ctrl, text="Serial Sorting", command=self.master_serial)
         self.btn_dist = ttk.Button(ctrl, text="Distributed Sorting", command=self.master_distributed)
-        self.btn_del = ttk.Button(ctrl, text="Hapus File .txt", command=self.delete_files)
+        self.btn_del = ttk.Button(ctrl, text="Hapus File Data", command=self.delete_files)
 
         self.btn_server.grid(row=0, column=0, padx=4, pady=3, sticky="ew")
         self.btn_gen.grid(row=0, column=1, padx=4, pady=3, sticky="ew")
@@ -582,7 +582,7 @@ class MergeSortGUI:
         ttk.Label(info, text="Mode ini tidak membutuhkan Wi-Fi/LAN maupun perangkat lain.").pack(anchor="w")
 
         self.lbl_local_unsorted = ttk.Label(info, text="unsorted.txt : -")
-        self.lbl_local_sorted = ttk.Label(info, text="sorted.txt : -")
+        self.lbl_local_sorted = ttk.Label(info, text="sorted.csv : -")
         self.lbl_local_preview = ttk.Label(info, text="Pratinjau : -", wraplength=980, justify="left")
         self.lbl_local_unsorted.pack(anchor="w", pady=(2, 0))
         self.lbl_local_sorted.pack(anchor="w")
@@ -593,7 +593,7 @@ class MergeSortGUI:
         self.btn_l_gen = ttk.Button(ctrl, text="Generate Data", command=self.local_generate)
         self.btn_l_serial = ttk.Button(ctrl, text="Serial Sorting (Baseline)", command=self.local_serial)
         self.btn_l_par = ttk.Button(ctrl, text="Local Parallel Sorting", command=self.local_parallel)
-        self.btn_l_del = ttk.Button(ctrl, text="Hapus File .txt", command=self.delete_files)
+        self.btn_l_del = ttk.Button(ctrl, text="Hapus File Data", command=self.delete_files)
         for i, b in enumerate([self.btn_l_gen, self.btn_l_serial, self.btn_l_par, self.btn_l_del]):
             b.grid(row=0, column=i, padx=4, pady=3, sticky="ew")
             ctrl.columnconfigure(i, weight=1)
@@ -859,7 +859,7 @@ class MergeSortGUI:
             self.lbl_preview.config(text=preview)
 
             self.lbl_local_unsorted.config(text=f"unsorted.txt : {unsorted_txt}")
-            self.lbl_local_sorted.config(text=f"sorted.txt : {'ADA' if os.path.exists(FILE_SORTED) else 'Belum ada'}")
+            self.lbl_local_sorted.config(text=f"sorted.csv : {'ADA' if os.path.exists(FILE_SORTED) else 'Belum ada'}")
             self.lbl_local_preview.config(text=f"Pratinjau : {preview}")
         except Exception:
             pass

@@ -33,7 +33,7 @@ def main():
         print(box_line(f" {Colors.BRIGHT_CYAN}[1]{Colors.RESET} {Colors.BOLD}MASTER NODE (Server){Colors.RESET} - Pusat Kontrol & Koordinasi Sorting"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[2]{Colors.RESET} {Colors.BOLD}WORKER NODE (Client){Colors.RESET} - Infinity Scan Master & Urutkan Data"))
         print(box_line(f" {Colors.BRIGHT_CYAN}[3]{Colors.RESET} {Colors.BOLD}LOCAL PARALLEL{Colors.RESET} - 1 Komputer, Semua Thread CPU (Tanpa Wi-Fi)"))
-        print(box_line(f" {Colors.BRIGHT_CYAN}[4]{Colors.RESET} {Colors.BOLD}Hapus File .txt{Colors.RESET} (unsorted.txt & sorted.txt)"))
+        print(box_line(f" {Colors.BRIGHT_CYAN}[4]{Colors.RESET} {Colors.BOLD}Hapus File Data{Colors.RESET} (unsorted.txt & sorted.csv)"))
         print(box_line(f" {Colors.BRIGHT_RED}[0]{Colors.RESET} Keluar Program"))
         print(box_border())
 
