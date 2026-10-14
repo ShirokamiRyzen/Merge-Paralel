@@ -17,6 +17,7 @@ Kenapa modul ini ada:
 
 import os
 import time
+import concurrent.futures
 from typing import Any, List, Optional, Sequence
 
 try:
@@ -83,6 +84,12 @@ def sort_values(values: Any, n_threads: Optional[int] = None) -> Any:
     """
     if HAS_NUMPY:
         try:
+            # ndarray (termasuk slice kecil dari partisi paralel) SELALU disortir
+            # dengan np.sort: rutin C ini MELEPAS GIL, sehingga banyak thread dapat
+            # benar-benar berjalan bersamaan di core berbeda. Fallback list.sort
+            # di bawah justru menahan GIL dan membuat penambahan thread memperlambat.
+            if isinstance(values, np.ndarray):
+                return np.sort(values)
             if len(values) >= NUMPY_THRESHOLD:
                 return np.sort(to_int32(values))
         except TypeError:
@@ -149,3 +156,60 @@ def merge_sorted_chunks(chunks: List[Any]) -> Any:
         merged.extend(c)
     merged.sort()
     return merged
+
+
+def parallel_merge(chunks: List[Any], n_threads: Optional[int] = None) -> Any:
+    """
+    Menggabungkan potongan terurut secara PARALEL (parallel range merge).
+
+    Berbeda dari `merge_sorted_chunks` yang men-`sort` ulang seluruh data secara
+    single-thread (O(n log n), tidak scaling), fungsi ini membagi rentang nilai
+    menjadi `n_threads` bagian memakai pivot (kuantil), lalu menggabungkan tiap
+    rentang di thread terpisah via `np.searchsorted`. Tiap rentang hanya menyortir
+    sebagian kecil data, sehingga penggabungan ikut bertambah cepat saat thread
+    ditambah. Fallback ke `merge_sorted_chunks` bila NumPy tidak tersedia.
+    """
+    chunks = [c for c in chunks if c is not None and len(c) > 0]
+    if not chunks:
+        return []
+    if len(chunks) == 1:
+        return to_int32(chunks[0])
+    if not HAS_NUMPY or n_threads is None or n_threads <= 1 or len(chunks) > 64:
+        return merge_sorted_chunks(chunks)
+
+    arrays = [to_int32(c) for c in chunks]
+    total = sum(a.size for a in arrays)
+    p = max(1, min(int(n_threads), total))
+    # Batasi jumlah rentang untuk data kecil: bila total data kecil, membuat
+    # terlalu banyak rentang/thread justru menambah overhead pivot & sinkronisasi.
+    MIN_RANGE = 250_000
+    p = max(1, min(p, max(1, total // MIN_RANGE)))
+    if p <= 1:
+        return merge_sorted_chunks(arrays)
+
+    # Sampel kuantil sebagai pivot pembagi rentang nilai.
+    sample = np.concatenate([a[::max(1, a.size // 2000)] for a in arrays])
+    sample.sort()
+    pivots = sample[np.linspace(0, sample.size - 1, p + 1).astype(int)][1:-1]
+    bounds = [
+        np.concatenate(([0], np.searchsorted(a, pivots, side="left"), [a.size]))
+        for a in arrays
+    ]
+
+    def _merge_range(r: int) -> Any:
+        parts = [arrays[j][bounds[j][r]:bounds[j][r + 1]] for j in range(len(arrays))]
+        parts = [x for x in parts if x.size]
+        if not parts:
+            return np.empty(0, dtype=np.int32)
+        if len(parts) == 1:
+            return parts[0]
+        return np.sort(np.concatenate(parts))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=p) as ex:
+        ranges = list(ex.map(_merge_range, range(p)))
+    ranges = [r for r in ranges if r.size]
+    if not ranges:
+        return np.empty(0, dtype=np.int32)
+    if len(ranges) == 1:
+        return ranges[0]
+    return np.concatenate(ranges)

@@ -16,7 +16,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 - **Dynamic Work-Stealing (Anti-Straggler)**: Semua node mengambil tugas dari **satu antrean bersama**. Node tercepat otomatis mengerjakan lebih banyak, sedangkan node/perangkat lambat tidak lagi menahan seluruh kluster (mengatasi *load imbalance* pada perangkat heterogen).
 - **Akselerasi NumPy**: Sorting menggunakan rutin vektor native NumPy (bebas GIL) alih-alih `ThreadPoolExecutor` yang terhambat GIL. Validasi urutan dan K-Way Merge juga dihitung secara vektor.
 - **Transfer Ringkas via Int32 + Zstandard**: Angka dikirim sebagai `ndarray[int32]` (~4 MB/juta vs ~5 MB pickle list) dan dikompresi dengan `zstandard` level 1 yang jauh lebih gesit dari zlib — menekan **bottleneck Wireless/LAN**.
-- **Linear K-Way Merge**: Master menggabungkan seluruh potongan terurut secara linear di akhir proses.
+- **K-Way Merge Paralel (Range-Partitioned)**: Master menggabungkan seluruh potongan terurut. Pada mode Local Parallel, penggabungan dilakukan **paralel** dengan membagi rentang nilai (pivot/kuantil + `np.searchsorted`) sehingga ikut bertambah cepat saat thread ditambah (lihat [§5 Algoritma](#-5-algoritma-yang-digunakan)).
 - **Ringkasan Terkirim ke Semua Node**: Setelah komputasi selesai, Master otomatis mengirim laporan ringkasan (total data, status validasi, rincian waktu) ke setiap Worker, lalu Worker menampilkan prompt **[Enter]** sebelum kembali STANDBY.
 - **Seed Sesi Kluster**: Master membuat satu `session_seed` di awal, mengirimkannya ke semua Worker, dan menampilkannya di **awal & akhir** proses (plus tabel `seed` tiap chunk). Worker menampilkan `session_seed` yang sama saat menerima tugas dan pada ringkasan akhir — jika seed identik, kedua node berada pada sesi yang sama. Master juga memverifikasi balik seed tiap chunk dan menandai bila ada yang tidak sinkron.
 - **Progress Bar Bersih**: Callback progres jaringan di-*throttle* (~8×/detik) dan transfer kecil (< 8 MB) tidak menampilkan bar, sehingga konsol tidak "nyampah".
@@ -38,7 +38,7 @@ Dilengkapi **Auto-Discovery Jaringan (UDP)**: Worker dapat mendeteksi Master sec
 ### 1.4 Pemisahan Mode Serial, Local Parallel, dan Distributed
 
 - **Mode Serial (`[1]`)** — 100% lokal di Master, tanpa Worker. Menjadi *baseline*.
-- **Mode Local Parallel (`[3]`)** — hanya 1 komputer, **tanpa perangkat lain & tanpa Wi-Fi/LAN**. Seluruh thread/core CPU dipakai untuk menyortir banyak chunk secara paralel (NumPy melepas GIL), lalu digabung K-Way Merge. Cocok dijalankan *offline*.
+- **Mode Local Parallel (`[3]`)** — hanya 1 komputer, **tanpa perangkat lain & tanpa Wi-Fi/LAN**. Data dibagi **1 chunk per thread**, tiap chunk disortir `np.sort` (melepas GIL) secara serentak di core berbeda, lalu digabung **K-Way Merge paralel** (`fastsort.parallel_merge`). Cocok dijalankan *offline*.
 - **Mode Distributed (`[2]`)** — pipelined stream terdistribusi penuh, menghasilkan metrik **Speedup $S$** dan **Efisiensi $E$**.
 
 ### 1.5 Manajemen Berkas
@@ -177,24 +177,37 @@ Contoh keluaran mode Distributed:
 
 ```text
 Rincian Kontribusi Tiap Node:
- +------------------------------+----------+--------------+------------------+--------------+--------------+
- | Node Komputer                | Thread   | Chunk        | Total Data       | Waktu Sort   | Status       |
- +------------------------------+----------+--------------+------------------+--------------+--------------+
- | Master Node (Lokal CPU)      | 12 Th    | 15 chunk     | 150,000,000 data | 17.1770s     | Selesai     |
- | Worker-1 (DESKTOP-L5EMIAD)   | 12 Th    | 15 chunk     | 150,000,000 data | 17.2061s     | Selesai     |
- +------------------------------+----------+--------------+------------------+--------------+--------------+
++------------------------------+----------+--------------+------------------+--------------+--------------+
+| Node Komputer | Thread | Chunk | Total Data | Waktu Sort | Status |
++------------------------------+----------+--------------+------------------+--------------+--------------+
+| Master Node (Lokal CPU) | 12 Th | 15 chunk | 150,000,000 data | 17.1770s | Selesai |
+| Worker-1 (DESKTOP-L5EMIAD) | 12 Th | 15 chunk | 150,000,000 data | 17.2061s | Selesai |
++------------------------------+----------+--------------+------------------+--------------+--------------+
 
 RINGKASAN WAKTU DISTRIBUTED SORTING:
- +------------------------------------------------------------------------+
- | Total Data Terurut        : 300,000,000 data                           |
- | Total Komputer            : 2 node                |
- | Status Validasi           : BERHASIL (Data Terurut Sempurna)           |
- | Waktu Komputasi : 17.2061 detik                              |
- | Waktu K-Way Merge         : 3.4210 detik                               |
- | Waktu Simpan sorted.txt   : 4.1205 detik                               |
- | TOTAL WAKTU KESELURUHAN   : 24.7476 detik   |
- +------------------------------------------------------------------------+
++------------------------------------------------------------------------+
+| Total Data Terurut : 300,000,000 data |
+| Total Komputer : 2 node |
+| Status Validasi : BERHASIL (Data Terurut Sempurna) |
+| Waktu Komputasi : 17.2061 detik |
+| Waktu K-Way Merge : 3.4210 detik |
++------------------------------------------------------------------------+
+
+METRIK EVALUASI: WAKTU KOMPUTASI SERIAL VS PARALEL
++--------------------------------------+--------------------------+
+| Parameter Evaluasi | Nilai / Hasil |
++--------------------------------------+--------------------------+
+| Waktu Komputasi Serial (T_serial) | 45.8123 detik |
+| Waktu Komputasi Paralel (T_parallel) | 20.6271 detik |
+| Komputer Terlibat | 2 node |
+| Speedup (S = T_serial / T_parallel) | 2.22x |
+| Efisiensi (E = S / K) | 111.05% |
++--------------------------------------+--------------------------+
 ```
+
+> Semua ringkasan waktu kini memakai **waktu komputasi (sorting + merge)** saja —
+> pembangkitan data dan penulisan berkas (`sorted.txt`) **tidak** dihitung, agar
+> perbandingan serial vs paralel adil dan skalabilitas paralel terlihat.
 
 ---
 
@@ -210,16 +223,121 @@ New-NetFirewallRule -DisplayName "MergeSort UDP" -Direction Inbound -LocalPort 5
 
 ---
 
-## 🧮 5. Metrik Evaluasi
+## 🧠 5. Algoritma yang Digunakan
 
-| Metrik | Rumus |
-| ------ | ----- |
-| Speedup | $S = T_{serial} / T_{distributed}$ |
-| Efisiensi | $E = S / K \times 100\%$ , dengan $K$ = jumlah komputer |
+Daftar **seluruh algoritma** yang dipakai aplikasi, lokasi implementasinya, dan fungsi masing-masing.
+
+### 5.1 Pengurutan (Sorting)
+
+| # | Algoritma | Lokasi | Fungsi |
+|---|-----------|--------|--------|
+| 1 | **Distributed Merge Sort** | `master.run_distributed_sorting` | Algoritma utama *divide-and-conquer* terdistribusi: data dibagi jadi banyak chunk → tiap chunk disortir paralel di Master & Worker → digabung (K-Way Merge) di Master. |
+| 2 | **Local Parallel Merge Sort** | `master.run_local_parallel_sorting` | Versi 1-komputer dari Merge Sort: 1 chunk per thread, tiap chunk disortir serentak di core berbeda, lalu digabung paralel. Tanpa jaringan. |
+| 3 | **Vectorized Comparison Sort (NumPy Introsort)** | `fastsort.sort_values` | Mengurutkan tiap chunk memakai `np.sort` (rutin C NumPy, varian *introsort*: quicksort→heapsort→insertion). Ini **melepas GIL**, sehingga banyak thread benar-benar berjalan serentak. Kompleksitas $O(m \log m)$ per chunk. |
+| 4 | **Timsort (Python `list.sort`)** | `fastsort.sort_values`, `run_serial_sorting` | Sort bawaan Python (hibrida merge+insertion, adaptif terhadap *run* terurut). Dipakai sebagai **baseline Serial** dan **fallback** bila NumPy tidak tersedia atau data < 20.000 elemen. |
+| 5 | **K-Way Merge (Concat + Sort vektor)** | `fastsort.merge_sorted_chunks` | Menggabungkan semua chunk terurut menjadi satu kesatuan: `np.concatenate` lalu `np.sort` vektor (atau `extend` + `sort` pada fallback). Kompleksitas $O(n \log n)$. |
+| 6 | **Parallel Range-Partitioned K-Way Merge** | `fastsort.parallel_merge` | Menggabungkan chunk terurut **secara paralel**: sampel kuantil dijadikan pivot → `np.searchsorted` membagi nilai tiap chunk menjadi `p` rentang → tiap rentang digabung di thread terpisah. Membuat fase merge ikut *scaling* dengan jumlah thread. |
+| 7 | **Heap Merge (`heapq.merge`)** | `run_serial_sorting` | Penggabungan serial berbasis *min-heap* (lazy, hemat memori) untuk beberapa blok terurut pada mode Serial. Kompleksitas $O(n \log k)$ bila semua sumber tersedia. |
+
+### 5.2 Paralelisme & Distribusi
+
+| # | Algoritma | Lokasi | Fungsi |
+|---|-----------|--------|--------|
+| 8 | **Dynamic Work-Stealing** | `run_distributed_sorting` (shared `queue.Queue`) | Semua node mengambil tugas dari **satu antrean bersama** (pull-based). Node tercepat otomatis mengerjakan lebih banyak → node lambat tidak menjadi *straggler*, sehingga *makespan* (waktu total) minimal pada kluster heterogen. |
+| 9 | **Pipelined Stream Concurrent** | `run_distributed_sorting` | Master dan seluruh Worker mulai menyortir **sejak detik pertama** tanpa saling menunggu; transfer data di-*stream* per chunk agar jaringan & CPU tumpang-tindih (*overlap*). |
+| 10 | **Adaptive Chunking / Partitioning** | `run_distributed_sorting`, `run_local_parallel_sorting` | Menentukan ukuran chunk secara dinamis dari jumlah node/thread (mis. `32 × node` untuk distributed, `1 × thread` untuk lokal), lalu dibatasi (10.000–500.000) agar transfer ringan dan beban merata. Fungsi: menyeimbangkan *granularitas* vs *overhead*. |
+| 11 | **Pembangkitan Data Terdistribusi (On-The-Fly)** | `master.generate_random_data`, `worker` (`GENERATE_UNSORTED`) | Membangkitkan data acak secara paralel oleh Master + seluruh Worker (masing-masing punya seed unik), lalu Master merapikan urutannya — mempercepat tahap `unsorted`. |
+| 12 | **Deterministic Chunk Seed (Multiplicative Hashing)** | `run_distributed_sorting._chunk_seed` | Menurunkan seed unik & deterministik tiap chunk dari `session_seed`: `(session_seed × 1.000.003 + chunk_id × 2.654.435.761) mod 1e9` (konstanta Knuth/multiplicative hash). Fungsi: reproduksibilitas + bukti sesi paralel yang sama antar-node. |
+
+### 5.3 Serialisasi & Jaringan
+
+| # | Algoritma | Lokasi | Fungsi |
+|---|-----------|--------|--------|
+| 13 | **Length-Prefixed TCP Framing** | `network_utils.send_packet` / `recv_packet` | Membungkus tiap paket dengan header **8-byte big-endian (`>Q`)** berisi panjang + flag codec, sehingga penerima bisa membaca objek besar utuh tanpa masalah fragmentasi TCP. |
+| 14 | **Adaptive Compression (zstd → zlib → raw)** | `network_utils` | Memilih codec terbaik otomatis: coba `zstandard` level 1 (dipakai bila hemat ≥ 8%), lalu `zlib` level 1 (≥ 10%), jika tidak menguntungkan kirim mentah. Fungsi: menekan *bottleneck* Wi-Fi/LAN. |
+| 15 | **int32 Vector Packing** | `fastsort.to_int32` / `to_list` | Mengubah `list[int]` menjadi `ndarray[int32]` (~4 MB/juta vs ~5 MB list pickle). Fungsi: hemat bandwidth & serialisasi panjang-mendekati-nol. |
+| 16 | **UDP Auto-Discovery (Broadcast + Subnet Sweep + Gateway + Loopback + Expiry)** | `MasterBeacon`, `WorkerScanner` | Worker menemukan Master otomatis tanpa ketik IP: probe broadcast + `prefix.1–254` (*menembus AP Isolation* hotspot) + gateway + `127.0.0.1`; Master membalas & menyiarkan *announce* berkala. Master yang tidak aktif > 4 detik dihapus. |
+| 17 | **Non-Blocking Socket Liveness (`select` + `MSG_PEEK`)** | `network_utils.is_socket_alive` | Mendeteksi koneksi TCP terputus **tanpa latensi PING** (peek byte tanpa mengonsumsi), agar Master bisa menandai/membersihkan Worker mati. |
+
+### 5.4 Validasi & Utilitas
+
+| # | Algoritma | Lokasi | Fungsi |
+|---|-----------|--------|--------|
+| 18 | **Vectorized Sortedness Validation** | `fastsort.is_sorted_values` | Membuktikan hasil benar-benar tak-menurun secara vektor: `np.all(a[:-1] <= a[1:])` (per-chunk + jeda GIL untuk data raksasa). Kompleksitas $O(n)$. |
+| 19 | **Mersenne Twister PRNG** | `random`, `random.Random(seed)` | Membangkitkan angka acak (dan mengulang deret yang sama dari sebuah seed) untuk data uji maupun pembangkitan on-the-fly yang deterministik. |
+| 20 | **Progressive Chunked I/O (GIL-friendly)** | `save_to_file`, `load_from_file`, `to_int32`, `is_sorted_values` | Memproses I/O & konversi per-blok (mis. 500.000) diselingi `time.sleep(0.001)` singkat. Fungsi: menjaga event loop GUI tetap responsif pada ratusan juta data. |
+| 21 | **Producer–Consumer stdout Queue (GUI)** | `gui_app.QueueWriter` / `AnsiConsole` | Mengarahkan `print` dari thread latar ke antrean thread-safe, lalu di-*drain* ke TextView oleh thread utama Tkinter (`after`). Fungsi: output aman & UI tidak *freeze*. |
+
+> **Catatan skalabilitas (Amdahl's Law):** fase pengurutan benar-benar paralel dan `np.sort` sudah sangat cepat
+> (~beberapa milidetik untuk 1 juta data), sehingga penambahan thread baru terasa jelas pada data besar
+> (mis. ≥ 5–10 juta). Karena itu **metrik perbandingan memakai waktu komputasi (sorting + merge)**,
+> tanpa I/O & pembangkitan data yang bersifat serial dan sama di semua mode.
 
 ---
 
-## 🛠️ 6. Kebutuhan Sistem
+## 🧮 6. Metrik Evaluasi
+
+Metrik memakai **waktu komputasi** (sorting + merge) — pembangkitan data dan penulisan `sorted.txt` **tidak** dihitung, agar perbandingan serial vs paralel adil.
+
+| Metrik | Rumus |
+| ------ | ----- |
+| Speedup | $S = T_{serial} / T_{parallel}$ |
+| Efisiensi | $E = S / K \times 100\%$ , dengan $K$ = jumlah komputasi paralel (node untuk Distributed, thread untuk Local Parallel) |
+
+---
+
+## 📈 7. Hasil Pengukuran & Analisis Skalabilitas
+
+Pengukuran pada **AMD Ryzen 5 7535HS (6 core fisik / 12 thread SMT)**, mode Local Parallel, $N = 10.000.000$ data. Waktu yang dicatat adalah **waktu komputasi (sort + merge)**, tanpa I/O.
+
+### 7.1 Contoh hasil
+
+```text
+Serial              : 6.294077 detik   (Timsort Python, 1 CPU)
+Paralel (4 thread)  : 0.059675 detik
+Paralel (12 thread) : 0.055005 detik
+```
+
+Perhatikan: Paralel **114× lebih cepat dari Serial** (NumPy vs Timsort Python), tetapi **4 vs 12 thread hanya beda ~8%**.
+
+### 7.2 Skalabilitas `np.sort` murni (N = 10 juta)
+
+| Thread | Waktu | Speedup vs 1 thread |
+| :----: | :---: | :-----------------: |
+| 1 | 0.0693 s | 1.00× |
+| 2 | 0.0396 s | 1.81× |
+| 4 | 0.0256 s | **2.80×** |
+| 6 | 0.0256 s | 2.80× |
+| 8 | 0.0224 s | 3.20× |
+| 12 | 0.0199 s | 3.60× |
+
+Dari **4 → 12 thread hanya naik 1.28×**.
+
+### 7.3 Rincian fase komputasi (12 thread, N = 10 juta)
+
+| Fase | Waktu | Scaling |
+| ---- | :---: | :-----: |
+| Sort chunk (paralel, `np.sort`) | ~0.020 s | baik |
+| K-Way Merge (paralel, range-partitioned) | ~0.040 s | terbatas (~1.5×) |
+
+Fase **merge mendominasi** total dan bagian orkestrasinya sebagian tertahan GIL.
+
+### 7.4 Mengapa beda 4 vs 12 thread sangat kecil?
+
+1. **Memory-bandwidth bound** — menyortir `int32` adalah operasi intensif memori. Sekitar **4 core sudah hampir menjenuhkan bandwidth RAM** (~2.8× dari plafon ~3.6×), sehingga menambah core berikutnya nyaris tidak menambah throughput.
+2. **SMT / Hyper-Threading** — CPU ini hanya punya **6 core fisik** (12 thread logis). Thread ke-7…12 berbagi core fisik yang sama dan hampir tidak menambah kinerja untuk beban memori.
+3. **Fase merge dominan & tidak scaling penuh** — K-Way Merge lebih lama daripada sort (menyortir ulang seluruh data), dan slicing/`concatenate` di dalamnya sebagian tertahan GIL → hanya ~1.5× dari 4→12 thread.
+4. **Hukum Amdahl** — $S_{\max} = \dfrac{1}{(1-P) + P/N}$. Karena sebagian pipeline serial (overhead chunk, merge, konversi) makin dominan saat N thread besar, penambahan thread menurun manfaatnya.
+
+### 7.5 Rekomendasi
+
+- Pada mesin 6-core, ***sweet spot* = 4–6 thread**; menaikkan ke 12 hampir tidak berguna.
+- Untuk melihat perbedaan besar antar jumlah thread, pakai **CPU dengan lebih banyak core fisik**, atau **N lebih besar** (mis. 50–100 juta) agar fase paralel lebih dominan — namun **bandwidth RAM** tetap menjadi plafonnya.
+- Perbandingan **Serial vs Paralel tetap sangat signifikan** (puluhan kali) karena NumPy melepas GIL dan memakai rutin C vektor.
+
+---
+
+## 🛠️ 8. Kebutuhan Sistem
 
 - **Python 3.8+** (diuji pada 3.14).
 - **Dependensi opsional** (disarankan dipasang untuk performa terbaik):

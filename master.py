@@ -57,7 +57,8 @@ def format_data_preview(arr: Optional[List[int]], max_items: int = 8) -> str:
     if arr is None or len(arr) == 0:
         return f"{Colors.DIM}[Belum ada data]{Colors.RESET}"
     if len(arr) <= max_items:
-        return f"{Colors.CYAN}{arr}{Colors.RESET}"
+        body = ", ".join(str(x) for x in arr)
+        return f"{Colors.CYAN}[{body}]{Colors.RESET}"
     half = max_items // 2
     front = ", ".join(str(x) for x in arr[:half])
     back = ", ".join(str(x) for x in arr[-half:])
@@ -72,14 +73,15 @@ def save_to_file(data: List[int], filename: str):
     """
     n = len(data)
     chunk = 500_000
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(filename, "wb") as f:
         if n == 0:
-            f.write("\n")
+            f.write(b"\n")
             return
         for start in range(0, n, chunk):
             block = data[start:start + chunk]
-            f.write("\n".join(map(str, block)))
-            f.write("\n")
+            if hasattr(block, "tolist"):
+                block = block.tolist()
+            f.write(("\n".join(map(str, block)) + "\n").encode("utf-8"))
             time.sleep(0.001)
 
 
@@ -458,12 +460,11 @@ def run_serial_sorting(data: List[int], waktu_unsort: Optional[float] = None) ->
     print(box_border())
     if waktu_unsort is not None:
         print(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
-    print(box_line(f"Waktu Pengurutan (Sorting)  : {Colors.BOLD}{sort_time:.6f} detik{Colors.RESET}"))
-    print(box_line(f"Waktu Simpan sorted.txt     : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
-    print(box_line(f"TOTAL WAKTU KESELURUHAN     : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_overall_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari sorting s/d simpan){Colors.RESET}"))
+    print(box_line(f"Waktu Pengurutan (Sorting) : {Colors.BOLD}{sort_time:.6f} detik{Colors.RESET}"))
     print(box_border())
 
-    return total_overall_time, is_valid, sorted_data
+    # Nilai pembanding = WAKTU KOMPUTASI (sorting), bukan total termasuk I/O.
+    return sort_time, is_valid, sorted_data
 
 
 def _worker_sort_task(worker_info: Dict[str, Any], chunk: List[int], chunk_id: int) -> Dict[str, Any]:
@@ -763,9 +764,7 @@ def run_distributed_sorting_on_fly(server: MasterServer, n_total: int = DEFAULT_
         if waktu_unsort is not None:
             print(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
         print(box_line(f"Waktu Komputasi : {Colors.BOLD}{process_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"Waktu K-Way Merge           : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"Waktu Simpan sorted.txt     : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
-        print(box_line(f"TOTAL WAKTU KESELURUHAN     : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari sorting s/d simpan){Colors.RESET}"))
+        print(box_line(f"Waktu K-Way Merge : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
         print(box_border())
 
         return total_distributed_time, is_valid, final_sorted_data, total_computers
@@ -1136,8 +1135,6 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
             summary_lines.append(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
         summary_lines.append(box_line(f"Waktu Komputasi : {Colors.BOLD}{concurrent_compute_time:.6f} detik{Colors.RESET}"))
         summary_lines.append(box_line(f"Waktu K-Way Merge : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
-        summary_lines.append(box_line(f"Waktu Simpan sorted.txt : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
-        summary_lines.append(box_line(f"TOTAL WAKTU KESELURUHAN : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_distributed_time:.6f} detik{Colors.RESET}"))
         summary_lines.append(box_border())
         for line in summary_lines:
             print(line)
@@ -1145,7 +1142,9 @@ def run_distributed_sorting(server: MasterServer, data: List[int], waktu_unsort:
         # Tampilkan ringkasan yang sama di sisi Worker Client
         broadcast_summary(server, "RINGKASAN WAKTU DISTRIBUTED SORTING", summary_lines)
 
-        return total_distributed_time, is_valid, final_sorted_data, total_computers, total_cluster_threads
+        # Nilai pembanding = WAKTU KOMPUTASI terdistribusi (komputasi paralel + merge),
+        # bukan total termasuk penulisan file, agar skalabilitas paralel terlihat.
+        return concurrent_compute_time + merge_time, is_valid, final_sorted_data, total_computers, total_cluster_threads
     finally:
         if hasattr(server, "beacon") and server.beacon:
             server.beacon.resume()
@@ -1182,12 +1181,21 @@ def run_local_parallel_sorting(data: List[int], waktu_unsort: Optional[float] = 
 
     t_overall_start = time.perf_counter()
 
-    # Partisi adaptif: beberapa chunk per thread agar distribusi beban lebih merata.
-    CHUNKS_PER_THREAD = 8
+    # Konversi SELURUH data ke ndarray int32 SEKALI saja (bukan per-chunk).
+    # Ini kunci scaling: np.sort di dalam thread melepas GIL, jadi partisi berupa
+    # slice ndarray (tanpa konversi Python per-chunk) benar-benar berjalan paralel.
+    # Konversi per-chunk seperti sebelumnya menahan GIL sehingga menambah thread
+    # justru menambah overhead serial dan membuat komputasi makin lambat.
+    work_data = fastsort.to_int32(data)
+
+    # Satu chunk per thread. Chunk besar = tiap thread mendapat porsi berat yang
+    # cukup agar `np.sort` benar-benar berjalan serentak di core berbeda, sekaligus
+    # meminimalkan overhead pengiriman tugas/merge pada data kecil.
+    CHUNKS_PER_THREAD = 1
     target_chunks = max(n_threads * CHUNKS_PER_THREAD, 1)
     chunk_size = max(10_000, (n_total + target_chunks - 1) // target_chunks)
     chunk_size = min(chunk_size, 500_000)
-    raw_chunks = [data[i:i + chunk_size] for i in range(0, n_total, chunk_size)]
+    raw_chunks = [work_data[i:i + chunk_size] for i in range(0, n_total, chunk_size)]
     num_chunks = len(raw_chunks)
 
     print(f" {Colors.CYAN}•{Colors.RESET} Partisi Data : {Colors.BOLD}{num_chunks} chunk{Colors.RESET} (~{chunk_size:,} data per chunk)")
@@ -1219,10 +1227,11 @@ def run_local_parallel_sorting(data: List[int], waktu_unsort: Optional[float] = 
     t_sort_end = time.perf_counter()
     sort_time = t_sort_end - t_sort_start
 
-    # K-Way Merge linear (vektor NumPy)
+    # K-Way Merge linear (vektor NumPy) — dijalankan PARALEL per rentang nilai.
     t_merge_start = time.perf_counter()
     print_progress_bar(1, 2, prefix="K-Way Merge Lokal", suffix="Menggabungkan chunk terurut...")
-    final_sorted_data = fastsort.merge_sorted_chunks([r for r in results if r is not None])
+    final_sorted_data = fastsort.parallel_merge(
+        [r for r in results if r is not None], n_threads=n_threads)
     print_progress_bar(2, 2, prefix="K-Way Merge Lokal", suffix="Selesai (100%)")
     t_merge_end = time.perf_counter()
     merge_time = t_merge_end - t_merge_start
@@ -1257,11 +1266,12 @@ def run_local_parallel_sorting(data: List[int], waktu_unsort: Optional[float] = 
         print(box_line(f"Waktu Unsort (Pembangkitan) : {Colors.BOLD}{waktu_unsort:.6f} detik{Colors.RESET}"))
     print(box_line(f"Waktu Sort Paralel : {Colors.BOLD}{sort_time:.6f} detik{Colors.RESET}"))
     print(box_line(f"Waktu K-Way Merge : {Colors.BOLD}{merge_time:.6f} detik{Colors.RESET}"))
-    print(box_line(f"Waktu Simpan sorted.txt : {Colors.BOLD}{save_time:.6f} detik{Colors.RESET}"))
-    print(box_line(f"TOTAL WAKTU KESELURUHAN : {Colors.BOLD}{Colors.BRIGHT_YELLOW}{total_overall_time:.6f} detik{Colors.RESET} {Colors.DIM}(dari sorting s/d simpan){Colors.RESET}"))
+    print(box_line(f"Waktu Komputasi (Sort+Merge) : {Colors.BOLD}{Colors.BRIGHT_GREEN}{sort_time + merge_time:.6f} detik{Colors.RESET}"))
     print(box_border())
 
-    return total_overall_time, is_valid, final_sorted_data
+    # Nilai pembanding = WAKTU KOMPUTASI (sort + merge), bukan total termasuk I/O,
+    # agar skalabilitas paralel benar-benar terlihat.
+    return sort_time + merge_time, is_valid, final_sorted_data
 
 
 def run_local_parallel_cli():
@@ -1408,28 +1418,33 @@ def run_local_parallel_cli():
 
 
 def print_comparison_metrics(t_serial: float, t_dist: float, total_computers: int, num_workers: int = 1):
-    """Menampilkan tabel perbandingan, Speedup, dan Efisiensi."""
+    """
+    Menampilkan tabel perbandingan, Speedup, dan Efisiensi.
+    Nilai t_serial / t_dist adalah WAKTU KOMPUTASI (sorting + merge), TIDAK termasuk
+    pembangkitan data maupun penulisan berkas, agar skalabilitas paralel terlihat
+    dan perbandingan adil (I/O bersifat serial dan sama di semua mode).
+    """
     speedup = t_serial / t_dist if t_dist > 0 else 0
     efficiency = (speedup / total_computers * 100) if total_computers > 0 else 0
 
-    print_header("METRIK EVALUASI: SERIAL VS DISTRIBUTED", "Perhitungan Speedup dan Efisiensi Komputasi Kluster")
+    print_header("METRIK EVALUASI: WAKTU KOMPUTASI SERIAL VS PARALEL", "Perhitungan Speedup dan Efisiensi Berdasarkan Waktu Komputasi")
     print_table_row("Parameter Evaluasi", "Nilai / Hasil", is_header=True)
-    print_table_row("Waktu Serial (T_serial)", f"{t_serial:.6f} detik")
-    print_table_row("Waktu Terdistribusi (T_dist)", f"{t_dist:.6f} detik")
+    print_table_row("Waktu Komputasi Serial (T_serial)", f"{t_serial:.6f} detik")
+    print_table_row("Waktu Komputasi Paralel (T_parallel)", f"{t_dist:.6f} detik")
     print_table_row("Komputer Terlibat", f"{total_computers} node")
-    
+
     color_speedup = Colors.BRIGHT_GREEN if speedup >= 1.0 else Colors.BRIGHT_YELLOW
-    print_table_row("Speedup (S = T_serial / T_dist)", f"{color_speedup}{speedup:.2f}x{Colors.RESET}")
+    print_table_row("Speedup (S = T_serial / T_parallel)", f"{color_speedup}{speedup:.2f}x{Colors.RESET}")
     print_table_row("Efisiensi (E = S / K)", f"{efficiency:.2f}%")
     print_table_footer()
 
-    print(f"\n{Colors.BRIGHT_CYAN}[Analisis Komputasi Terdistribusi]:{Colors.RESET}")
+    print(f"\n{Colors.BRIGHT_CYAN}[Analisis Komputasi Paralel]:{Colors.RESET}")
     if speedup > 1.0:
-        print(f" {Colors.BRIGHT_GREEN}✔ Distributed Sorting LEBIH CEPAT ({speedup:.2f}x akselerasi) dibanding mode Serial!{Colors.RESET}")
-        print(f"   Memanfaatkan {total_computers} komputer secara simultan.")
+        print(f" {Colors.BRIGHT_GREEN}✔ Komputasi Paralel LEBIH CEPAT ({speedup:.2f}x akselerasi) dibanding mode Serial!{Colors.RESET}")
+        print(f" Memanfaatkan {total_computers} komputer / seluruh thread CPU secara simultan.")
     else:
         print(f" {Colors.BRIGHT_YELLOW}ℹ Mode Serial lebih cepat atau seimbang.{Colors.RESET}")
-        print("   Catatan: Gunakan lebih banyak worker atau data >= 1.000.000 untuk efisiensi puncak.")
+        print(" Catatan: Gunakan lebih banyak worker/thread atau data yang lebih besar untuk efisiensi puncak.")
 
 
 def run_master_cli(port: int = DEFAULT_PORT):

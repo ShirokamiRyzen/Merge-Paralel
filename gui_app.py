@@ -233,10 +233,10 @@ def gui_print_progress_bar(current, total, prefix="", suffix="", length=30, fill
 
 
 def plain_preview(data, max_items: int = 8) -> str:
-    if not data:
+    if data is None or len(data) == 0:
         return "[Belum ada data]"
     if len(data) <= max_items:
-        return str(list(data))
+        return "[" + ", ".join(str(x) for x in data) + "]"
     half = max_items // 2
     front = ", ".join(str(x) for x in data[:half])
     back = ", ".join(str(x) for x in data[-half:])
@@ -673,11 +673,13 @@ class MergeSortGUI:
         self._refresh_master_status_once()
 
     def _has_any_data(self) -> bool:
-        return bool(self.current_data) or os.path.exists(FILE_UNSORTED)
+        data = self.current_data
+        has_data = data is not None and len(data) > 0
+        return has_data or os.path.exists(FILE_UNSORTED)
 
     def _ensure_data(self):
         """Muat data di dalam task-thread (bukan main-thread) agar UI tidak beku."""
-        if self.current_data:
+        if self.current_data is not None and len(self.current_data) > 0:
             return self.current_data
         loaded = master.load_from_file(FILE_UNSORTED)
         if loaded:
@@ -848,14 +850,12 @@ class MergeSortGUI:
             else:
                 self.lbl_workers.config(text="0 node (server belum aktif)")
 
-            data = self.current_data
-            if data is None and os.path.exists(FILE_UNSORTED):
-                data = None
+            has_mem = self.current_data is not None and len(self.current_data) > 0
             unsorted_txt = (f"ADA ({len(self.current_data):,} data di memori)"
-                            if self.current_data else "Belum ada / belum dimuat")
+                            if has_mem else "Belum ada / belum dimuat")
             self.lbl_unsorted.config(text=unsorted_txt)
             self.lbl_sorted.config(text="ADA" if os.path.exists(FILE_SORTED) else "Belum ada")
-            preview = plain_preview(self.current_data) if self.current_data else "-"
+            preview = plain_preview(self.current_data) if has_mem else "-"
             self.lbl_preview.config(text=preview)
 
             self.lbl_local_unsorted.config(text=f"unsorted.txt : {unsorted_txt}")
